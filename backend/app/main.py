@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .logging_config import configure_logging
 from .routers.auth import router as auth_router
+from .routers.conversations import router as conversations_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -29,6 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(conversations_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])
@@ -39,3 +41,5 @@ async def health() -> dict[str, str]:
 @app.get("/api/v1/health", tags=["system"])
 async def api_health() -> dict[str, str]:
     return {"status": "ok", "service": "codeatlas-api"}
+
+
