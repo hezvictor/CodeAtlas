@@ -1,0 +1,1 @@
+"""CodeAtlas backend application."""
