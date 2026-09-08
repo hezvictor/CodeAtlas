@@ -1,6 +1,7 @@
-from functools import lru_cache
+﻿from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -23,6 +24,19 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def validate_jwt_secret(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("JWT_SECRET_KEY must not be empty")
+        return value
+
+    def model_post_init(self, __context) -> None:
+        if self.app_env.lower() in {"prod", "production"} and (
+            len(self.jwt_secret_key) < 32 or self.jwt_secret_key.startswith("replace")
+        ):
+            raise ValueError("A strong JWT_SECRET_KEY is required in production")
 
 
 @lru_cache

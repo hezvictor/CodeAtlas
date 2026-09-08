@@ -1,4 +1,4 @@
-# 页面原型（Throwaway Prototype）
+﻿# 页面原型（Throwaway Prototype）
 
 这是用于确定界面方向的可丢弃原型，不是生产代码。当前原型以 ACM 竞赛学习者为对象，覆盖首页、聊天、私人知识库和登录状态。
 

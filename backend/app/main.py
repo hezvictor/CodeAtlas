@@ -1,11 +1,14 @@
-﻿import logging
+import asyncio
+import logging
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .logging_config import configure_logging
+from .db import engine
+from .logging_config import configure_logging, request_id
 from .routers.auth import router as auth_router
 from .routers.conversations import router as conversations_router
 
@@ -14,21 +17,40 @@ configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 
+async def _cleanup_runs(registry):
+    while True:
+        await asyncio.sleep(60)
+        await registry.cleanup()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    from .routers.conversations import runs
+    cleanup_task = asyncio.create_task(_cleanup_runs(runs))
     logger.info("CodeAtlas backend starting in %s environment", settings.app_env)
-    yield
-    logger.info("CodeAtlas backend stopped")
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
+        logger.info("CodeAtlas backend stopped")
 
 
 app = FastAPI(title="CodeAtlas API", version="0.1.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[settings.frontend_url],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+
+@app.middleware("http")
+async def request_logging(request, call_next):
+    token = request_id.set(request.headers.get("X-Request-ID", str(uuid.uuid4())))
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id.get()
+        return response
+    finally:
+        request_id.reset(token)
+
+
+app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")
 
@@ -43,3 +65,9 @@ async def api_health() -> dict[str, str]:
     return {"status": "ok", "service": "codeatlas-api"}
 
 
+@app.get("/ready", tags=["system"])
+async def ready() -> dict[str, str]:
+    from sqlalchemy import text
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+    return {"status": "ready", "service": "codeatlas-backend"}

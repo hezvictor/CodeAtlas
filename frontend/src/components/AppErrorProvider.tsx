@@ -1,0 +1,1 @@
+﻿"use client"; import {ReactNode} from "react"; import {GlobalErrorBoundary,GlobalErrorNotice} from "./GlobalErrorBoundary"; export default function AppErrorProvider({children}:{children:ReactNode}){return <GlobalErrorBoundary><GlobalErrorNotice/>{children}</GlobalErrorBoundary>}

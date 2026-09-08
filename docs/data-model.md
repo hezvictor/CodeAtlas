@@ -1,4 +1,4 @@
-# CodeAtlas 初版数据模型
+﻿# CodeAtlas 初版数据模型
 
 数据库：PostgreSQL 16 + pgvector。ID 使用 UUID，时间统一存储 UTC。
 

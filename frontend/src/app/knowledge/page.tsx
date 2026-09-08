@@ -1,0 +1,1 @@
+﻿import PlaceholderPage from "../../components/PlaceholderPage"; export default function KnowledgePage(){return <PlaceholderPage kind="PRIVATE KNOWLEDGE / 02" title="知识库" description="资料会被整理成可引用的上下文，文件上传、索引和 RAG 将在 Phase 3 接入。"/ >}

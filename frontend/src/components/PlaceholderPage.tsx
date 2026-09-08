@@ -1,0 +1,2 @@
+﻿import Navbar from "./Navbar";
+export default function PlaceholderPage({kind,title,description}:{kind:string;title:string;description:string}){return <><Navbar/><main className="workspace"><div className="eyebrow">{kind}</div><h1 className="page-title">{title}</h1><p className="sub">{description}</p><section className="placeholder panel"><span className="placeholder-mark">SOON</span><h2>这个模块正在 Phase 3 / 4 排期中</h2><p>当前先保留入口和页面结构，暂不连接题库、文件上传或知识库检索服务。</p></section></main></>}

@@ -1,0 +1,4 @@
+﻿"use client";
+import Link from "next/link"; import {useEffect,useState} from "react";
+const links=[["首页","/"],["聊天","/chat"],["题库","/problems"],["知识库","/knowledge"]];
+export default function Navbar(){const [user,setUser]=useState<string|null>(null);useEffect(()=>setUser(localStorage.getItem("codeatlas_user")),[]);return <header className="topbar"><Link className="brand" href="/"><i/>CodeAtlas</Link><nav className="nav">{links.map(([label,href])=><Link key={href} href={href}>{label}</Link>)}</nav><div className="top-actions">{user?<span className="profile">{user.slice(0,1)}</span>:<><Link className="pill" href="/auth/login">登录</Link><Link className="pill fill" href="/auth/register">注册</Link></>}</div></header>}

@@ -1,0 +1,1 @@
+﻿import PlaceholderPage from "../../components/PlaceholderPage"; export default function ProblemsPage(){return <PlaceholderPage kind="PROBLEM SET / 03" title="题库" description="选择一道题，开始分析；题目引用和 ACM 工作流将在 Phase 4 接入。"/>}

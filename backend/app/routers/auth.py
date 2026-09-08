@@ -1,6 +1,7 @@
-from datetime import UTC, datetime
+﻿from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import create_access_token, create_refresh_token, hash_password, hash_refresh_token, verify_password
 from ..db import get_session
@@ -23,7 +24,11 @@ async def register(payload: RegisterRequest, session: AsyncSession = Depends(get
     session.add(user)
     await session.flush()
     session.add(RefreshToken(user_id=user.id, token_hash=token_hash, expires_at=expires))
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Email already registered") from None
     await session.refresh(user)
     return token_response(user, raw)
 
@@ -39,7 +44,7 @@ async def login(payload: LoginRequest, session: AsyncSession = Depends(get_sessi
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_session)):
-    record = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(payload.refresh_token)))
+    record = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(payload.refresh_token)).with_for_update())
     if not record or record.revoked_at or record.expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
     record.revoked_at = datetime.now(UTC)

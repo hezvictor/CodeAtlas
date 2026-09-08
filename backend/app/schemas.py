@@ -1,6 +1,6 @@
-import uuid
+﻿import uuid
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -45,6 +45,14 @@ class MessageResponse(BaseModel):
 class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     mode: str = Field(default="normal", pattern="^normal$")
-    solution_language: str | None = None
-    attachment_ids: list[uuid.UUID] = []
+    solution_language: str | None = Field(default=None, max_length=30)
+    attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     problem_id: uuid.UUID | None = None
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("content must not be blank")
+        return value
