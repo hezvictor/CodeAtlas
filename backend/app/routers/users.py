@@ -27,11 +27,13 @@ async def me(uid=Depends(current_user_id), session: AsyncSession = Depends(get_s
 @router.patch("/me", response_model=UserResponse)
 async def update_me(payload: UserUpdate, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     user = await get_user(uid, session)
-    existing = await session.scalar(select(User).where(User.email == str(payload.email).lower(), User.id != uid))
-    if existing:
-        raise HTTPException(409, "Email already registered")
-    user.nickname = payload.nickname.strip()
-    user.email = str(payload.email).lower()
+    if payload.email is not None:
+        existing = await session.scalar(select(User).where(User.email == str(payload.email).lower(), User.id != uid))
+        if existing:
+            raise HTTPException(409, "Email already registered")
+        user.email = str(payload.email).lower()
+    if payload.nickname is not None:
+        user.nickname = payload.nickname.strip()
     await session.commit()
     await session.refresh(user)
     return user

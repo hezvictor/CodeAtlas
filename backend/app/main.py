@@ -3,7 +3,9 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
@@ -38,6 +40,15 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="CodeAtlas API", version="0.1.0", lifespan=lifespan)
+
+@app.exception_handler(HTTPException)
+async def http_error_handler(_: Request, exc: HTTPException):
+    code = "INVALID_CREDENTIALS" if exc.status_code == 401 and "password" in str(exc.detail).lower() else "REQUEST_FAILED"
+    return JSONResponse(status_code=exc.status_code, content={"code": code, "message": str(exc.detail), "details": {}})
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(_: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"code": "VALIDATION_ERROR", "message": "请求参数不合法", "details": exc.errors()})
 
 
 @app.middleware("http")

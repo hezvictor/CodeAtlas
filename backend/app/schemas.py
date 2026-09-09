@@ -26,12 +26,14 @@ class LogoutRequest(BaseModel):
     refresh_token: str
 
 class UserUpdate(BaseModel):
-    nickname: str = Field(min_length=1, max_length=80)
-    email: EmailStr
+    nickname: str | None = Field(default=None, min_length=1, max_length=80)
+    email: EmailStr | None = None
 
     @field_validator("nickname")
     @classmethod
     def normalize_nickname(cls, value: str) -> str:
+        if value is None:
+            return value
         value = value.strip()
         if not value:
             raise ValueError("nickname must not be blank")

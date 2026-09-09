@@ -62,10 +62,3 @@ async def logout(payload: LogoutRequest, session: AsyncSession = Depends(get_ses
     if record and not record.revoked_at:
         record.revoked_at = datetime.now(UTC)
         await session.commit()
-
-@router.get("/me", response_model=UserResponse)
-async def me(user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
-    user = await session.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
