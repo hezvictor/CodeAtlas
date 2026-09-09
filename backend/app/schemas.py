@@ -27,6 +27,7 @@ class LogoutRequest(BaseModel):
 
 class UserUpdate(BaseModel):
     nickname: str = Field(min_length=1, max_length=80)
+    email: EmailStr
 
     @field_validator("nickname")
     @classmethod

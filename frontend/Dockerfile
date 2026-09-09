@@ -1,7 +1,7 @@
 ﻿FROM docker.m.daocloud.io/library/node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install --registry=https://registry.npmmirror.com --fetch-retries=5 --fetch-retry-factor=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=120000 --fetch-timeout=120000
+RUN npm ci --registry=https://registry.npmmirror.com --maxsockets=1 --fetch-retries=8 --fetch-retry-factor=2 --fetch-retry-mintimeout=5000 --fetch-retry-maxtimeout=180000 --fetch-timeout=180000
 FROM docker.m.daocloud.io/library/node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules

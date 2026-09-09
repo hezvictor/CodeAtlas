@@ -3,7 +3,7 @@ import uuid
 from functools import partial
 import boto3
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import hash_password, verify_password
 from ..dependencies import current_user_id
@@ -27,7 +27,11 @@ async def me(uid=Depends(current_user_id), session: AsyncSession = Depends(get_s
 @router.patch("/me", response_model=UserResponse)
 async def update_me(payload: UserUpdate, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     user = await get_user(uid, session)
+    existing = await session.scalar(select(User).where(User.email == str(payload.email).lower(), User.id != uid))
+    if existing:
+        raise HTTPException(409, "Email already registered")
     user.nickname = payload.nickname.strip()
+    user.email = str(payload.email).lower()
     await session.commit()
     await session.refresh(user)
     return user
