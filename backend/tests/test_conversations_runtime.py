@@ -27,6 +27,10 @@ async def test_registry_expires_stale_run():
 
     await registry.cleanup()
 
+    assert registry.is_running("conversation-1")
+    assert registry.get_stop_event("conversation-1").is_set()
+
+    await registry.release("conversation-1", handle)
     assert not registry.is_running("conversation-1")
     assert registry.get_stop_event("conversation-1") is None
 

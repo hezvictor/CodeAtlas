@@ -7,6 +7,14 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     nickname: str = Field(min_length=1, max_length=80)
 
+    @field_validator("nickname")
+    @classmethod
+    def normalize_nickname(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("nickname must not be blank")
+        return value
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
@@ -16,6 +24,21 @@ class RefreshRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+class UserUpdate(BaseModel):
+    nickname: str = Field(min_length=1, max_length=80)
+
+    @field_validator("nickname")
+    @classmethod
+    def normalize_nickname(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("nickname must not be blank")
+        return value
+
+class PasswordUpdate(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 30
     s3_endpoint: str = "http://localhost:9000"
     s3_bucket: str = "codeatlas-documents"
+    avatar_bucket: str = "codeatlas-avatars"
+    browser_s3_endpoint: str = "http://localhost:9000"
     s3_region: str = "us-east-1"
     minio_root_user: str = "codeatlas"
     minio_root_password: str = "codeatlas-dev-password"

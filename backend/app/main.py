@@ -11,6 +11,7 @@ from .db import engine
 from .logging_config import configure_logging, request_id
 from .routers.auth import router as auth_router
 from .routers.conversations import router as conversations_router
+from .routers.users import router as users_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -53,6 +54,7 @@ async def request_logging(request, call_next):
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")
+app.include_router(users_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

@@ -2,7 +2,7 @@
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --timeout 120 --retries 5 --no-build-isolation --index-url https://mirrors.aliyun.com/pypi/simple/ .
 COPY app ./app
 COPY migrations ./migrations
 COPY alembic.ini .

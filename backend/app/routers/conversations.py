@@ -62,8 +62,6 @@ class RunRegistry:
             for cid, (lock, handle) in list(self._runs.items()):
                 if lock.locked() and handle.last_activity.timestamp() < cutoff:
                     handle.stop_event.set()
-                    lock.release()
-                    self._runs.pop(cid, None)
 
 
 runs = RunRegistry()

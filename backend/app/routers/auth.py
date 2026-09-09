@@ -57,8 +57,8 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
     return token_response(user, raw)
 
 @router.post("/logout", status_code=204)
-async def logout(payload: LogoutRequest, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
-    record = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(payload.refresh_token), RefreshToken.user_id == user_id))
+async def logout(payload: LogoutRequest, session: AsyncSession = Depends(get_session)):
+    record = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(payload.refresh_token)))
     if record and not record.revoked_at:
         record.revoked_at = datetime.now(UTC)
         await session.commit()
