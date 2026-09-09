@@ -1,8 +1,0 @@
-#!/bin/sh
-set -eu
-
-if command -v pwsh >/dev/null 2>&1; then
-  pwsh -NoProfile -File "$(git rev-parse --show-toplevel)/scripts/check-utf8-bom.ps1"
-else
-  powershell -NoProfile -ExecutionPolicy Bypass -File "$(git rev-parse --show-toplevel)/scripts/check-utf8-bom.ps1"
-fi
