@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 export const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
 export type User = { id: string; email: string; nickname: string; avatar_url: string | null; created_at: string };
 export function getToken() { return localStorage.getItem("codeatlas_access_token") || ""; }

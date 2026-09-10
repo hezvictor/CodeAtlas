@@ -1,35 +1,25 @@
-﻿# CodeAtlas 初版数据模型
+﻿# CodeAtlas 数据模型
 
-数据库：PostgreSQL 16 + pgvector。ID 使用 UUID，时间统一存储 UTC。
+当前数据库为 PostgreSQL，ID 使用 UUID，时间字段使用 UTC。实际迁移目前只创建账号、refresh token、会话和消息相关表。
 
-## 1. 业务表
+## 已实现表
 
-| 表 | 关键字段 |
-|---|---|
-| users | id, email unique, password_hash, nickname, avatar_url, created_at |
-| refresh_tokens | id, user_id, token_hash, expires_at, revoked_at |
-| conversations | id, user_id, title, mode, created_at, updated_at |
-| messages | id, conversation_id, role, content, status, model, token_usage, created_at |
-| attachments | id, conversation_id, user_id, object_key, filename, mime_type, size |
-| knowledge_groups | id, user_id, name, description |
-| documents | id, user_id, group_id, title, source_type, version, status, error_message |
-| document_chunks | id, document_id, content, metadata jsonb, embedding vector |
-| citations | id, message_id, chunk_id, rank, score |
-| problems | id, user_id, title, slug, statement, input_spec, output_spec, constraints, tags jsonb |
+| 表 | 关键字段 | 用途 |
+|---|---|---|
+| `users` | `id`, `email`, `password_hash`, `nickname`, `avatar_url` | 用户资料 |
+| `refresh_tokens` | `id`, `user_id`, `token_hash`, `expires_at`, `revoked_at` | refresh token |
+| `conversations` | `id`, `user_id`, `title`, `mode`, `created_at`, `updated_at` | 会话 |
+| `messages` | `id`, `conversation_id`, `role`, `content`, `status`, `model`, `duration_ms`, `first_token_latency_ms` | 消息与模型耗时 |
 
-## 2. 约束与索引
+助手被停止时已生成内容会以 `cancelled` 状态保存。模型耗时字段将在普通聊天完善阶段补充；本项目不记录模型 token 用量统计。引用字段在知识库接入时再确定。
 
-- `users.email` 唯一且统一小写。
-- 所有用户资源带 `user_id`，删除用户时级联删除其资源。
-- `messages(conversation_id, created_at)` 查询索引。
-- `documents(user_id, group_id, status)` 过滤索引。
-- `document_chunks` 使用 pgvector HNSW 或 IVFFlat 索引；embedding 维度由实际百炼模型确定。
-- 引用保存检索时的 score 和 rank，便于调试回答质量。
+## 约束
 
-## 3. 文档元数据
+- 邮箱唯一，应用层按小写处理。
+- 会话和消息查询强制带当前用户条件。
+- 会话按更新时间倒序，消息按创建时间正序。
+- 模式仅支持 `normal`。
 
-`document_chunks.metadata` 至少包含：`page`、`section`、`line_start`、`line_end`、`language`、`source_filename`。缺失字段使用 null，不伪造定位信息。
+## 规划模型
 
-## 4. LangGraph 状态
-
-图状态使用 thread ID 关联 `conversation_id`，由 PostgreSQL checkpointer 管理。业务表保存最终消息和运行状态，checkpointer 保存可恢复的中间状态，二者不互相替代。
+尚未建立迁移或 ORM 实体：`attachments`、`knowledge_groups`、`documents`、`document_chunks`、`citations`、`problems`、LangGraph checkpoints。接入知识库时再确定 embedding 维度、向量索引、版本和级联规则。

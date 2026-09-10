@@ -1,6 +1,7 @@
 def test_user_schemas_support_profile_and_password_changes():
     from app.schemas import PasswordUpdate, UserUpdate
-    assert UserUpdate(nickname=" Alice ").nickname == " Alice "
+    assert UserUpdate(nickname=" Alice ").nickname == "Alice"
+    assert UserUpdate(nickname=None).nickname is None
     assert PasswordUpdate(current_password="old", new_password="new-password").new_password == "new-password"
 
 def test_user_nickname_rejects_whitespace_only_values():

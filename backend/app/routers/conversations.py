@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import logging
 import time
@@ -15,7 +15,7 @@ from ..config import get_settings
 from ..db import get_session, session_factory
 from ..dependencies import current_user_id
 from ..models import Conversation, Message
-from ..schemas import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate, MessageResponse
+from ..schemas import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate, MessagePage, MessageResponse, RetryRequest
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 logger = logging.getLogger(__name__)
@@ -92,9 +92,35 @@ async def update_conversation(cid, payload: ConversationUpdate, uid=Depends(curr
 async def delete_conversation(cid, uid=Depends(current_user_id), session=Depends(get_session)):
     item = await conversation(cid, uid, session); await session.delete(item); await session.commit()
 
-@router.get("/{cid}/messages", response_model=list[MessageResponse])
-async def messages(cid, uid=Depends(current_user_id), session=Depends(get_session)):
-    await conversation(cid, uid, session); return (await session.scalars(select(Message).where(Message.conversation_id == cid).order_by(Message.created_at))).all()
+@router.get("/{cid}/messages", response_model=MessagePage)
+async def messages(cid, limit: int = 30, before: datetime | None = None, uid=Depends(current_user_id), session=Depends(get_session)):
+    await conversation(cid, uid, session)
+    limit = max(1, min(limit, 100))
+    query = select(Message).where(Message.conversation_id == cid)
+    if before:
+        query = query.where(Message.created_at < before)
+    rows = list((await session.scalars(query.order_by(Message.created_at.desc()).limit(limit + 1))).all())
+    has_more = len(rows) > limit
+    items = list(reversed(rows[:limit]))
+    return MessagePage(items=items, has_more=has_more, next_before=items[0].created_at if has_more else None)
+
+@router.post("/{cid}/messages/{mid}/retry")
+async def retry_message(cid: UUID, mid: UUID, payload: RetryRequest, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    await conversation(cid, uid, session)
+    target = await session.scalar(select(Message).where(Message.id == mid, Message.conversation_id == cid))
+    if not target: raise HTTPException(404, "Message not found")
+    content = payload.content.strip() if payload.content else target.content
+    if target.role == "user":
+        target.content = content
+        await session.execute(Message.__table__.delete().where(Message.conversation_id == cid, Message.created_at > target.created_at))
+    elif target.role == "assistant":
+        previous = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.created_at < target.created_at).order_by(Message.created_at.desc()))
+        if not previous or previous.role != "user": raise HTTPException(400, "Assistant message has no user prompt")
+        content = previous.content
+        await session.delete(target)
+    else: raise HTTPException(400, "Only user or assistant messages can be retried")
+    await session.commit()
+    return {"content": content}
 
 async def model_stream(prompt: str, history: list[dict], stop_event: asyncio.Event) -> AsyncGenerator[str, None]:
     settings = get_settings()
@@ -125,7 +151,7 @@ async def model_stream(prompt: str, history: list[dict], stop_event: asyncio.Eve
 async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     await conversation(cid, uid, session)
     handle = await runs.acquire(str(cid))
-    started = time.monotonic()
+    started = time.monotonic(); first_token_ms = None
     try:
         user = Message(conversation_id=cid, role="user", content=payload.content, status="completed")
         session.add(user); await session.commit()
@@ -137,15 +163,20 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
 
     async def generate():
         answer = ""
+        first_token_ms = None
         try:
             yield event("run.started", {"conversation_id": str(cid)}); yield event("retrieval.completed", {"count": 0})
             async for delta in model_stream(payload.content, history, handle.stop_event):
                 if await request.is_disconnected(): handle.stop_event.set(); break
                 handle.last_activity = datetime.now(UTC)
-                answer += delta; yield event("message.delta", {"content": delta}); yield event("ping", {})
+                answer += delta
+                if first_token_ms is None:
+                    first_token_ms = round((time.monotonic() - started) * 1000)
+                    yield event("run.first_token", {"latency_ms": first_token_ms})
+                yield event("message.delta", {"content": delta}); yield event("ping", {})
             if answer:
                 async with session_factory() as save_session:
-                    save_session.add(Message(conversation_id=cid, role="assistant", content=answer, status="cancelled" if handle.stop_event.is_set() else "completed", model=get_settings().chat_model))
+                    save_session.add(Message(conversation_id=cid, role="assistant", content=answer, status="cancelled" if handle.stop_event.is_set() else "completed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms))
                     await save_session.execute(Conversation.__table__.update().where(Conversation.id == cid).values(updated_at=func.now()))
                     await save_session.commit()
             yield event("run.interrupted" if handle.stop_event.is_set() else "run.completed", {})
@@ -153,6 +184,9 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
             handle.stop_event.set(); raise
         except Exception:
             logger.exception("chat stream failed", extra={"conversation_id": str(cid), "user_id": str(uid), "prompt_length": len(payload.content), "duration_ms": round((time.monotonic() - started) * 1000)})
+            async with session_factory() as save_session:
+                save_session.add(Message(conversation_id=cid, role="assistant", content="", status="failed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms))
+                await save_session.commit()
             yield event("run.failed", {"code": "CHAT_PROVIDER_ERROR", "message": "生成回答失败，请稍后重试"})
         finally:
             await runs.release(str(cid), handle)

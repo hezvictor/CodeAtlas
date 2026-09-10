@@ -67,7 +67,12 @@ class ConversationResponse(BaseModel):
     id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; created_at: datetime; updated_at: datetime
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None; created_at: datetime
+    id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None
+    duration_ms: int | None; first_token_latency_ms: int | None; created_at: datetime
+class MessagePage(BaseModel):
+    items: list[MessageResponse]
+    has_more: bool
+    next_before: datetime | None
 class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     mode: str = Field(default="normal", pattern="^normal$")
@@ -82,3 +87,10 @@ class ChatRequest(BaseModel):
         if not value:
             raise ValueError("content must not be blank")
         return value
+class RetryRequest(BaseModel):
+    content: str | None = Field(default=None, min_length=1, max_length=20000)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value):
+        return value.strip() if value is not None else value

@@ -1,6 +1,6 @@
 ﻿# CodeAtlas
 
-CodeAtlas 是面向 ACM/OI 学习者的私人知识库 AI 助教。当前已完成 Phase 1 账号与页面骨架，以及 Phase 2 会话与普通聊天基础链路。
+CodeAtlas 是面向 ACM/OI 学习者的私人知识库 AI 助教。当前已完成 Phase 1 账号与页面骨架，以及 Phase 2 会话与普通聊天链路，下一步进入 Phase 3 私人知识库 RAG。
 
 ## Docker 启动
 
@@ -12,7 +12,7 @@ docker compose up --build
 
 访问：
 
-- 前端：http://localhost:3000
+- 前端：http://localhost:${FRONTEND_PORT:-3000}
 - 后端文档：http://localhost:8000/docs
 - MinIO：http://localhost:9001
 
@@ -29,6 +29,8 @@ CHAT_MODEL=your-model
 
 未配置模型时，会话和消息接口仍可用，但发送聊天请求会返回 `run.failed` 事件并说明缺少配置。
 
+如果宿主机 3000 端口已被其他服务占用，可在 `.env` 中设置 `FRONTEND_PORT=3001`，然后重新执行 `docker compose up --build`。
+
 ## 当前 API
 
 API 前缀为 `/api/v1`。认证接口位于 `/auth`，会话接口位于 `/conversations`，聊天使用 `POST /conversations/{id}/messages/stream` 返回 SSE 事件。所有会话和消息接口要求 Bearer access token，并按当前用户隔离数据。
@@ -36,6 +38,6 @@ API 前缀为 `/api/v1`。认证接口位于 `/auth`，会话接口位于 `/conv
 ## 开发阶段
 
 - Phase 1：账号、JWT、页面骨架，已完成
-- Phase 2：会话 CRUD、消息持久化、普通模式 SSE、停止和恢复，开发中
+- Phase 2：会话 CRUD、消息持久化、消息分页与重试、普通模式 SSE、停止和恢复，已完成
 - Phase 3：私人知识库 RAG
 - Phase 4：ACM 分析与解题工作流

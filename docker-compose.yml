@@ -54,9 +54,9 @@ services:
   frontend:
     build: ./frontend
     container_name: codeatlas-frontend
-    ports: ["3000:3000"]
+    ports: ["${FRONTEND_PORT:-3000}:3000"]
     depends_on:
-      backend: {condition: service_started}
+      backend: {condition: service_healthy}
   postgres:
     image: docker.m.daocloud.io/pgvector/pgvector:pg16
     container_name: codeatlas-postgres

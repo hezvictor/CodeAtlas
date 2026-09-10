@@ -41,4 +41,6 @@ class Message(Base):
     content: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String(20), default="completed")
     model: Mapped[str | None] = mapped_column(String(100))
+    duration_ms: Mapped[int | None] = mapped_column()
+    first_token_latency_ms: Mapped[int | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
