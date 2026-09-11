@@ -3,6 +3,8 @@ import {FormEvent, useEffect, useRef, useState} from "react";
 import Navbar from "../../components/Navbar";
 import {apiFetch, reportError} from "../../lib/errors";
 
+
+
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
 type Citation = {chunk_id: string; quote: string; score: number; locator: Record<string, unknown>};
 type KnowledgeGroup = {id: string; name: string};
