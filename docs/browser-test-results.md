@@ -1,45 +1,35 @@
-﻿# CodeAtlas 浏览器测试结果
+﻿# CodeAtlas 浏览器与集成验证结果
 
-执行日期：2026-09-07
-测试工具：agent-browser
-前端：`http://localhost:3000`
-后端：`http://localhost:8000`
+执行日期：2026-09-11
+测试工具：agent-browser 与 Docker Compose
+前端：http://localhost:3000
+后端：http://localhost:8000
 
 ## 环境结果
 
-- Docker Compose 已成功启动前端、后端、PostgreSQL、Redis 和 MinIO。
-- 后端健康检查：`GET /health` 返回 `200`。
-- 前端生产镜像构建通过。
-- Docker 构建过程中发现并修复 `backend/pyproject.toml`、`backend/alembic.ini` 的 BOM 兼容问题。
+- Docker Compose 已启动前端、后端、Worker、PostgreSQL、Redis 和 MinIO。
+- Alembic current 为 0005_embedding_dimensions (head)。
+- /health、/ready、/knowledge 均返回 200。
+- 前端 Next.js 生产构建通过。
+- backend-test 测试套件 27 passed。
 
-## 用例结果
+## Phase 3 结果
 
 | 用例 | 结果 | 实际结果 |
 |---|---|---|
-| 首页加载 | 通过 | 页面和固定导航正常 |
-| 登录页加载 | 通过 | 表单控件正常 |
-| 注册成功 | 通过 | 新账号创建成功并跳转 `/chat` |
-| 重复邮箱注册 | 通过 | 全局提示 `Email already registered` |
-| 错误密码登录 | 通过 | 全局提示 `Invalid email or password`，留在登录页 |
-| 正确账号登录 | 通过 | 成功跳转 `/chat`，并拉取会话列表 |
-| 新建会话 | 通过 | 左侧出现“新对话”，输入框启用 |
-| 发送消息 | 通过 | 用户消息立即显示，SSE 请求完成 |
-| 模型未配置 | 通过 | 助手消息显示 `CHAT_MODEL and DASHSCOPE_API_KEY are required`，没有白屏 |
-| 首条消息自动命名 | 通过 | 会话名自动变为消息摘要 `binary search` |
-| 双击重命名 | 通过 | 可编辑并按 Enter 保存为 `renamed session` |
-| 消息复制 | 通过 | 按钮状态变为 `已复制` |
-| 模式菜单 | 通过 | 普通模式可用，ACM 两项显示 Phase 4 占位 |
-| 右侧回答依据 | 通过 | Phase 3 未实现说明正常显示 |
-| 题库占位页 | 通过 | Phase 4 占位内容正常 |
-| 知识库占位页 | 通过 | Phase 3 占位内容正常 |
-| 聊天未登录保护 | 通过 | 未登录时显示“请先登录” |
-| 后端健康检查 | 通过 | `/health` 返回 `200` |
+| 分组管理 | 通过 | 创建、列表和用户隔离接口可用 |
+| HTML 上传 | 通过 | 扩展名、文件头和大小校验生效 |
+| 文档处理 | 通过 | Worker 执行解析、切块、Embedding、索引状态流转 |
+| HTML 清理 | 通过 | BeautifulSoup 移除 script/style/nav/footer |
+| 文档预览 | 通过 | indexed 文档返回解析文本和定位信息 |
+| 私有下载 | 通过 | 返回 5 分钟预签名 URL，资源按用户隔离 |
+| 混合检索 | 通过 | PostgreSQL 全文 + pgvector，RRF 合并 |
+| 引用校验 | 通过 | 仅持久化本次召回切片的有效引用 |
+| 聊天分组选择 | 通过 | knowledge_group_ids 已写入 SSE 请求 |
+| 重试一致性 | 通过 | reuse_last_user 避免重试重复创建用户消息 |
 
-## 追加验证\n\n- `.env` 中的模型配置已传入后端容器，容器内检查为 `model-configured`。\n- 真实请求通过 SSE 完成，助手消息已渲染：`Binary search is an efficient algorithm...`。\n- 后端 `/health` 和 Docker 服务均保持正常。\n\n## 未覆盖
+## 未覆盖或限制
 
-- 真实 DashScope 模型流式回答：通过。补充映射 Compose 环境变量后，浏览器收到完整英文回答并显示在助手消息中。此前发现并修复了上游 `choices: []` 事件导致的 `list index out of range`。
-- 停止生成和恢复：当前浏览器流程未触发独立 stop/resume 操作。
-- 移动端视口截图：本轮重点覆盖了完整业务链路，尚未做视口矩阵截图。
-
-测试方案：`docs/browser-test-plan.md`
-测试截图：`test-artifacts/login-page.png`
+- 尚未用浏览器完成真实 DashScope Embedding 的跨账号完整 RAG 对话回归；后端解析、检索、引用和 Worker 测试已覆盖。
+- 尚未完成移动端视口截图矩阵和 stop/resume 独立浏览器流程。
+- 当前不支持网页 URL、OCR、rerank、题库、ACM 工作流和 LangGraph checkpoint。

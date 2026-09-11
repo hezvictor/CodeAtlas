@@ -78,6 +78,8 @@ class ChatRequest(BaseModel):
     mode: str = Field(default="normal", pattern="^normal$")
     solution_language: str | None = Field(default=None, max_length=30)
     attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    knowledge_group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+    reuse_last_user: bool = False
     problem_id: uuid.UUID | None = None
 
     @field_validator("content")
@@ -94,3 +96,69 @@ class RetryRequest(BaseModel):
     @classmethod
     def normalize_content(cls, value):
         return value.strip() if value is not None else value
+
+
+class KnowledgeGroupCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("name", "description")
+    @classmethod
+    def normalize_text(cls, value):
+        return value.strip() if value is not None else value
+
+
+class KnowledgeGroupUpdate(KnowledgeGroupCreate):
+    pass
+
+
+class KnowledgeGroupResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    user_id: uuid.UUID
+    name: str
+    description: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentVersionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    document_id: uuid.UUID
+    version_no: int
+    original_filename: str
+    mime_type: str
+    extension: str
+    size_bytes: int
+    sha256: str
+    status: str
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    indexed_at: datetime | None
+
+
+class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    user_id: uuid.UUID
+    group_id: uuid.UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    latest_version: DocumentVersionResponse | None = None
+
+
+class DocumentPreviewResponse(BaseModel):
+    document: DocumentResponse
+    version: DocumentVersionResponse
+    text: str
+
+
+class AttachmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    document_version_id: uuid.UUID
+    created_at: datetime

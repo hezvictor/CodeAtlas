@@ -19,10 +19,20 @@ API 前缀：`/api/v1`。除注册、登录、刷新和健康检查外，接口�
 | POST | `/conversations/{id}/messages/stream` | SSE 流式聊天 |
 | POST | `/conversations/{id}/run/stop` | 设置停止信号 |
 | POST | `/conversations/{id}/run/resume` | 下一次请求复用已持久化消息 |
+| GET/POST/PATCH/DELETE | `/knowledge/groups` | 私人知识库分组管理 |
+| GET/POST | `/knowledge/documents` | 文档列表和 multipart 上传 |
+| GET/DELETE | `/knowledge/documents/{id}` | 文档详情和软删除 |
+| GET | `/knowledge/documents/{id}/status` | 查询处理状态 |
+| POST | `/knowledge/documents/{id}/retry` | 重试失败处理 |
+| POST | `/knowledge/documents/{id}/reindex` | 重新索引当前版本 |
+| GET | `/knowledge/documents/{id}/preview` | 查看解析文本 |
+| GET | `/knowledge/documents/{id}/download` | 获取短时效下载 URL |
+| GET/POST/DELETE | `/conversations/{id}/attachments` | 管理会话文档附件 |
+| GET | `/conversations/{id}/messages/{message_id}/citations` | 查询已验证引用 |
 
-模式当前只接受 `normal`。聊天内容去空白后长度为 1 到 20000；附件和题目字段只做协议保留，尚未处理。
+模式当前只接受 `normal`。聊天内容去空白后长度为 1 到 20000。knowledge_group_ids 选择检索分组，attachment_ids 选择已挂载文档；题目字段仍只做协议保留。重试内部使用 reuse_last_user 避免重复写入用户消息。
 
-SSE 当前事件为 `run.started`、`retrieval.completed`（固定 `count: 0`）、`run.first_token`、`message.delta`、`ping`、`run.interrupted`、`run.completed`、`run.failed`。尚未发送引用事件。消息支持 `completed`、`cancelled`、`failed` 状态；重新生成或编辑重试会删除目标消息及其后续消息后重新生成。
+SSE 当前事件为 `run.started`、`retrieval.completed`、`retrieval.failed`、`run.first_token`、`message.delta`、`citations.validated`、`message.final`、`ping`、`run.interrupted`、`run.completed`、`run.failed`。知识库检索由请求中的 `knowledge_group_ids` 和 `attachment_ids` 控制；指定知识范围时检索失败会发送 `retrieval.failed` 并终止生成，未指定范围时会明确标记失败后继续普通聊天；引用只接受本次召回切片。消息支持 `completed`、`cancelled`、`failed` 状态；重新生成或编辑重试会删除目标消息及其后续消息后重新生成。
 
 ## 错误格式
 
@@ -30,8 +40,8 @@ SSE 当前事件为 `run.started`、`retrieval.completed`（固定 `count: 0`）
 {"code":"VALIDATION_ERROR","message":"请求参数不合法","details":{}}
 ```
 
-## 规划接口
+## 尚未实现接口
 
-知识库文件、文档和题库接口尚未注册。原规划路径见 [product-requirements.md](product-requirements.md) 和 [roadmap.md](roadmap.md)，上线前需以实际路由和 schema 重新确认。
+题库搜索、题目详情、ACM 分析和在线评测接口尚未注册。知识库接口已注册并以上表为准。
 
 所有资源必须由服务端根据 token 中的用户 ID 过滤。

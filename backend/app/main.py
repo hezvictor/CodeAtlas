@@ -7,13 +7,17 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
-from .config import get_settings
+from .config import get_settings, validate_embedding_dimension
 from .db import engine
 from .logging_config import configure_logging, request_id
 from .routers.auth import router as auth_router
 from .routers.conversations import router as conversations_router
 from .routers.users import router as users_router
+from .routers.knowledge_groups import router as knowledge_groups_router
+from .routers.knowledge_documents import router as knowledge_documents_router
+from .routers.attachments import router as attachments_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -26,9 +30,28 @@ async def _cleanup_runs(registry):
         await registry.cleanup()
 
 
+async def _validate_embedding_database() -> None:
+    query = text(
+        """
+        SELECT format_type(a.atttypid, a.atttypmod)
+        FROM pg_attribute AS a
+        JOIN pg_class AS c ON c.oid = a.attrelid
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relname = 'document_chunks'
+          AND a.attname = 'embedding' AND NOT a.attisdropped
+        """
+    )
+    async with engine.connect() as connection:
+        database_type = await connection.scalar(query)
+    if not database_type:
+        raise RuntimeError("Database embedding column document_chunks.embedding was not found")
+    validate_embedding_dimension(settings.embedding_dimensions, str(database_type))
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     from .routers.conversations import runs
+    await _validate_embedding_database()
     cleanup_task = asyncio.create_task(_cleanup_runs(runs))
     logger.info("CodeAtlas backend starting in %s environment", settings.app_env)
     try:
@@ -66,6 +89,9 @@ app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url], allow_
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
+app.include_router(knowledge_groups_router, prefix="/api/v1")
+app.include_router(knowledge_documents_router, prefix="/api/v1")
+app.include_router(attachments_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

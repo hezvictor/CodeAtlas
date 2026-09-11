@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session, session_factory
 from ..dependencies import current_user_id
-from ..models import Conversation, Message
+from ..models import Citation, Conversation, Message
+from ..chat_rag import build_context_prompt
+from ..citations import persist_citations
+from ..services.retrieval_service import retrieve_chunks
 from ..schemas import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate, MessagePage, MessageResponse, RetryRequest
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -152,11 +155,28 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
     await conversation(cid, uid, session)
     handle = await runs.acquire(str(cid))
     started = time.monotonic(); first_token_ms = None
+    retrieved = []
+    retrieval_error = None
+    retrieval_requested = bool(payload.knowledge_group_ids or payload.attachment_ids)
     try:
-        user = Message(conversation_id=cid, role="user", content=payload.content, status="completed")
-        session.add(user); await session.commit()
+        if payload.reuse_last_user:
+            user = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.role == "user").order_by(Message.created_at.desc()).limit(1))
+            if not user:
+                raise HTTPException(400, "No user message available to retry")
+            if user.content != payload.content:
+                user.content = payload.content
+                await session.commit()
+        else:
+            user = Message(conversation_id=cid, role="user", content=payload.content, status="completed")
+            session.add(user); await session.commit()
         rows = (await session.scalars(select(Message).where(Message.conversation_id == cid, Message.id != user.id).order_by(Message.created_at))).all()
         history = [{"role": m.role, "content": m.content} for m in rows]
+        try:
+            retrieved = await retrieve_chunks(session, uid, payload.content, payload.knowledge_group_ids, payload.attachment_ids)
+        except Exception as error:
+            logger.exception("retrieval failed", extra={"conversation_id": str(cid), "user_id": str(uid)})
+            retrieval_error = error
+            retrieved = []
         await session.close()
     except Exception:
         await session.rollback(); await runs.release(str(cid), handle); raise
@@ -165,8 +185,18 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
         answer = ""
         first_token_ms = None
         try:
-            yield event("run.started", {"conversation_id": str(cid)}); yield event("retrieval.completed", {"count": 0})
-            async for delta in model_stream(payload.content, history, handle.stop_event):
+            yield event("run.started", {"conversation_id": str(cid)})
+            if retrieval_error:
+                yield event("retrieval.failed", {"code": "RETRIEVAL_FAILED", "message": "知识库检索失败，请稍后重试"})
+                if retrieval_requested:
+                    async with session_factory() as save_session:
+                        save_session.add(Message(conversation_id=cid, role="assistant", content="", status="failed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000)))
+                        await save_session.commit()
+                    yield event("run.failed", {"code": "RETRIEVAL_FAILED", "message": "知识库检索失败，请稍后重试"})
+                    return
+            yield event("retrieval.completed", {"status": "failed" if retrieval_error else "ok", "count": len(retrieved), "items": [{"chunk_id": str(item.chunk_id), "score": item.score, "locator": item.locator or {}} for item in retrieved]})
+            prompt = build_context_prompt(payload.content, retrieved)
+            async for delta in model_stream(prompt, history, handle.stop_event):
                 if await request.is_disconnected(): handle.stop_event.set(); break
                 handle.last_activity = datetime.now(UTC)
                 answer += delta
@@ -176,9 +206,15 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
                 yield event("message.delta", {"content": delta}); yield event("ping", {})
             if answer:
                 async with session_factory() as save_session:
-                    save_session.add(Message(conversation_id=cid, role="assistant", content=answer, status="cancelled" if handle.stop_event.is_set() else "completed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms))
+                    assistant = Message(conversation_id=cid, role="assistant", content=answer, status="cancelled" if handle.stop_event.is_set() else "completed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms)
+                    save_session.add(assistant)
+                    await save_session.flush()
+                    cleaned, citations = await persist_citations(save_session, assistant.id, answer, retrieved)
+                    assistant.content = cleaned
                     await save_session.execute(Conversation.__table__.update().where(Conversation.id == cid).values(updated_at=func.now()))
                     await save_session.commit()
+                    yield event("citations.validated", {"items": [{"chunk_id": str(c.chunk_id), "quote": c.quote, "score": c.score, "locator": c.locator} for c in citations]})
+                    yield event("message.final", {"content": cleaned})
             yield event("run.interrupted" if handle.stop_event.is_set() else "run.completed", {})
         except asyncio.CancelledError:
             handle.stop_event.set(); raise
@@ -201,3 +237,10 @@ async def stop(cid, uid=Depends(current_user_id), session=Depends(get_session)):
 @router.post("/{cid}/run/resume", status_code=202)
 async def resume(cid, uid=Depends(current_user_id), session=Depends(get_session)):
     await conversation(cid, uid, session); return {"status": "ready", "message": "Send the next request to resume from persisted messages"}
+
+
+@router.get("/{cid}/messages/{mid}/citations")
+async def message_citations(cid: UUID, mid: UUID, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    await conversation(cid, uid, session)
+    rows = (await session.scalars(select(Citation).join(Message, Citation.message_id == Message.id).where(Message.id == mid, Message.conversation_id == cid, Citation.is_valid.is_(True)).order_by(Citation.rank))).all()
+    return [{"id": str(row.id), "chunk_id": str(row.chunk_id), "quote": row.quote, "score": row.score, "rank": row.rank, "locator": row.locator} for row in rows]

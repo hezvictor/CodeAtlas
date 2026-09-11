@@ -1,8 +1,8 @@
 ﻿# ACM 私人知识库 AI 助教平台：技术栈与架构
 
-**版本**：0.2（技术基线）  
-**日期**：2026-09-09  
-**状态**：以当前代码为准；下文标注“规划”的能力尚未实现
+**版本**：0.3（技术基线）  
+**日期**：2026-09-11  
+**状态**：以当前代码为准
 
 ## 1. 推荐技术栈
 
@@ -10,10 +10,10 @@
 |---|---|---|
 | 前端 | Next.js、React、TypeScript、自定义 CSS | 当前实现；尚未使用 Tailwind CSS 或 shadcn/ui |
 | 后端 | Python、FastAPI、Pydantic | API、鉴权、上传和流式接口 |
-| Agent | LangGraph、LangChain | 规划中；当前由 FastAPI 直接调用百炼兼容接口 |
+| Agent | FastAPI 服务编排 | 当前不强制引入 LangGraph；未来可选接入 |
 | 数据库 | PostgreSQL + pgvector | 业务数据、消息、文档元数据和向量检索 |
-| 检查点 | LangGraph PostgreSQL Checkpointer | 保存图状态，支持停止后继续 |
-| 异步任务 | Redis + Celery 或 Arq | 规划中；Redis 仅在 Compose 中运行 |
+| 检查点 | 未启用 | resume 当前复用持久化消息，不是 checkpoint 恢复 |
+| 异步任务 | Redis + Arq | 文档解析、切块和 Embedding Worker |
 | 文件存储 | S3 兼容存储；开发环境 MinIO | 保存原始文档和版本文件 |
 | 模型 | 阿里云百炼 OpenAI 兼容接口 | 当前聊天模型和 embedding 模型 |
 | 鉴权 | JWT Access Token + Refresh Token、Argon2 | 邮箱密码登录和会话续期 |
@@ -28,6 +28,7 @@ DASHSCOPE_API_KEY=sk-your-key
 DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 CHAT_MODEL=<configured-chat-model>
 EMBEDDING_MODEL=<configured-embedding-model>
+EMBEDDING_DIMENSIONS=1024
 ```
 
 实际模型名称由部署配置决定。应用层封装 `ChatModelProvider` 和 `EmbeddingProvider`，避免未来切换 DeepSeek 或其他 OpenAI 兼容服务时修改业务逻辑。
@@ -40,12 +41,12 @@ EMBEDDING_MODEL=<configured-embedding-model>
   -> FastAPI API / SSE
        -> Auth Service
        -> Chat Service
-       -> Chat Router -> 百炼 OpenAI 兼容接口
-       -> PostgreSQL 会话与消息
-       -> (规划) LangGraph / Retriever / 文档服务
+       -> Chat Router -> Retriever -> 百炼 OpenAI 兼容接口
+       -> PostgreSQL 会话、消息、文档、向量与引用
+       -> Redis/Arq Worker -> MinIO 原始文件
 ```
 
-## 4. RAG 流程（规划）
+## 4. RAG 流程（已实现）
 
 1. 上传文件并创建文档记录，状态为 `uploaded`。
 2. 异步解析文本和结构信息，保留页码、章节、代码行号等定位元数据。
@@ -55,7 +56,7 @@ EMBEDDING_MODEL=<configured-embedding-model>
 6. 进行关键词 + 向量混合检索，拼接有限上下文并要求模型输出引用标识。
 7. 后端校验引用标识，SSE 返回回答增量、状态事件和引用信息。
 
-## 5. LangGraph 工作流（规划）
+## 5. 可选的未来 LangGraph 工作流
 
 普通问答建议节点：`load_context -> retrieve -> compose_prompt -> generate -> validate_citations -> persist`。
 
@@ -83,15 +84,16 @@ ACM 模式建议节点：`classify_mode -> extract_problem -> retrieve_problem_c
 
 所有查询必须带 `user_id` 或等价权限条件；向量召回也必须先执行用户范围过滤。
 
-## 7. API 约定（规划部分待落地）
+## 7. API 约定
 
 - `POST /auth/register`、`POST /auth/login`、`POST /auth/refresh`、`POST /auth/logout`
 - `GET/POST/PATCH/DELETE /conversations`
 - `GET/POST /conversations/{id}/messages`：SSE 返回流式事件
 - `POST /conversations/{id}/stop`、`POST /conversations/{id}/resume`
-- `POST /files`、`GET /files/{id}/status`、`POST /files/{id}/retry`
 - `GET/POST/PATCH/DELETE /knowledge/documents`
 - `GET /problems/search`：为 `@` 选择器提供题目搜索
+
+知识库实际路径和 SSE 事件以 [api-contract.md](api-contract.md) 为准；题库路径仍为规划。
 
 ## 8. 安全与运维
 

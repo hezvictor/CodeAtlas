@@ -17,6 +17,7 @@ services:
       FRONTEND_URL: http://localhost:3000
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
       CHAT_MODEL: ${CHAT_MODEL}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     ports: ["8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
@@ -47,7 +48,28 @@ services:
       FRONTEND_URL: http://localhost:3000
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
       CHAT_MODEL: ${CHAT_MODEL}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_healthy}
+  worker:
+    build: ./backend
+    container_name: codeatlas-worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://codeatlas:codeatlas-dev-password@postgres:5432/codeatlas
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: codeatlas-documents
+      S3_REGION: us-east-1
+      MINIO_ROOT_USER: codeatlas
+      MINIO_ROOT_PASSWORD: codeatlas-dev-password
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+    command: ["arq", "app.worker.WorkerSettings"]
+    depends_on:
+      backend: {condition: service_healthy}
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}

@@ -10,13 +10,13 @@
 
 当前只支持普通模式；`resume` 不是 LangGraph checkpoint 恢复。重新生成或编辑重试时，从目标消息开始截断后续消息，再基于截断后的历史重新生成。
 
-## 下一阶段：私人知识库与 RAG
+## 已完成：私人知识库与 RAG 基础闭环
 
-规划分组、文件上传、MinIO、异步解析、切块、Embedding、pgvector 检索、引用校验和预览。Redis 与 MinIO 已在 Compose 提供，postgres 使用 pgvector 镜像，但业务接口、数据表和 worker 尚未实现。
+已实现分组、文件上传、MinIO、Arq 异步解析、切块、Embedding、pgvector/全文混合检索、引用校验和文档预览。当前支持 Markdown、PDF、DOCX、TXT、C/C++、Java、Python 和 HTML 文件上传，不支持网页 URL 抓取。Embedding 使用部署中 `text-embedding-v3` 的 1024 维向量。
 
-## 后续阶段：题库与 ACM 工作流
+## 尚未开发：题库与 ACM 工作流
 
-规划题目搜索/详情、`@` 题目选择、ACM 分析模式、语言选择和解题模式。LangGraph 与 checkpointer 只有真正接入后才能提供 checkpoint 恢复。
+规划题目搜索/详情、`@` 题目选择、ACM 分析模式、语言选择和解题模式。LangGraph 与 checkpointer 只有真正接入后才能提供 checkpoint 恢复。当前明确不强制引入 LangGraph；普通聊天和 RAG 由 FastAPI 服务编排。
 
 ## 长期计划
 

@@ -150,6 +150,44 @@ async def test_stream_failure_records_metrics_and_persists_failed_message(monkey
         app.dependency_overrides.clear()
 
 
+@pytest.mark.asyncio
+async def test_scoped_retrieval_failure_does_not_fall_back_to_chat(monkeypatch):
+    cid, uid = uuid.uuid4(), uuid.uuid4()
+    request_session = _FakeSession(Conversation(id=cid, user_id=uid, title="新对话", mode="normal"))
+    saved_sessions = []
+
+    async def override_session():
+        yield request_session
+
+    async def fail_retrieval(*_args, **_kwargs):
+        raise RuntimeError("embedding service unavailable")
+
+    async def unexpected_model_stream(*_args, **_kwargs):
+        raise AssertionError("scoped retrieval failure must not call the chat model")
+        yield "unreachable"
+
+    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[current_user_id] = lambda: uid
+    monkeypatch.setattr(conversations_module, "session_factory", _FakeSessionFactory(saved_sessions))
+    monkeypatch.setattr(conversations_module, "retrieve_chunks", fail_retrieval)
+    monkeypatch.setattr(conversations_module, "model_stream", unexpected_model_stream)
+
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                f"/api/v1/conversations/{cid}/messages/stream",
+                json={"content": "查询知识库", "knowledge_group_ids": [str(uuid.uuid4())]},
+            )
+
+        assert response.status_code == 200
+        assert "event: retrieval.failed" in response.text
+        assert "RETRIEVAL_FAILED" in response.text
+        assert "event: run.failed" in response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_chat_request_rejects_whitespace_only_content_and_strips_content():
     from app.schemas import ChatRequest
 
@@ -169,3 +207,9 @@ def test_retry_request_supports_editing_the_user_message():
     from app.schemas import RetryRequest
 
     assert RetryRequest(content=" updated prompt ").content == "updated prompt"
+
+
+def test_chat_request_can_reuse_user_message_after_retry():
+    from app.schemas import ChatRequest
+
+    assert ChatRequest(content="retry", reuse_last_user=True).reuse_last_user is True
