@@ -17,7 +17,12 @@ from ..dependencies import current_user_id
 from ..models import Citation, Conversation, Message
 from ..chat_rag import build_context_prompt
 from ..citations import persist_citations
+from ..acm_workflow import build_acm_prompt, sanitize_analysis_output
+from ..code_validation import extract_solution_code, validate_solution_code
+from ..services.problem_context import format_problem_context, message_context_metadata, resolve_problem_context, validate_chat_context
 from ..services.retrieval_service import retrieve_chunks
+from ..services.context_budget import trim_history, trim_retrieved_chunks
+from ..services.run_state import RunLease, RunState
 from ..schemas import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate, MessagePage, MessageResponse, RetryRequest
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -26,15 +31,24 @@ logger = logging.getLogger(__name__)
 class RunHandle:
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
+    lease: RunLease | None = None
 
 
 class RunRegistry:
-    def __init__(self, ttl_seconds: int = 900):
+    def __init__(self, ttl_seconds: int = 900, state: RunState | None = None):
         self.ttl_seconds = ttl_seconds
+        self.state = state
         self._runs: dict[str, tuple[asyncio.Lock, RunHandle]] = {}
         self._guard = asyncio.Lock()
 
     async def acquire(self, cid: str) -> RunHandle:
+        if self.state:
+            lease = await self.state.acquire(cid)
+            handle = RunHandle(lease=lease)
+            async with self._guard:
+                self._runs[cid] = (asyncio.Lock(), handle)
+                await self._runs[cid][0].acquire()
+            return handle
         async with self._guard:
             lock, handle = self._runs.setdefault(cid, (asyncio.Lock(), RunHandle()))
             if lock.locked():
@@ -44,6 +58,8 @@ class RunRegistry:
             return handle
 
     async def release(self, cid: str, handle: RunHandle) -> None:
+        if handle.lease:
+            await handle.lease.release()
         async with self._guard:
             entry = self._runs.get(cid)
             if entry and entry[1] is handle:
@@ -68,6 +84,10 @@ class RunRegistry:
 
 
 runs = RunRegistry()
+
+
+def configure_run_state(redis) -> None:
+    runs.state = RunState(redis)
 
 async def conversation(cid: UUID, uid: UUID, session: AsyncSession):
     item = await session.scalar(select(Conversation).where(Conversation.id == cid, Conversation.user_id == uid))
@@ -116,14 +136,16 @@ async def retry_message(cid: UUID, mid: UUID, payload: RetryRequest, uid=Depends
     if target.role == "user":
         target.content = content
         await session.execute(Message.__table__.delete().where(Message.conversation_id == cid, Message.created_at > target.created_at))
+        context_message = target
     elif target.role == "assistant":
         previous = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.created_at < target.created_at).order_by(Message.created_at.desc()))
         if not previous or previous.role != "user": raise HTTPException(400, "Assistant message has no user prompt")
         content = previous.content
         await session.delete(target)
+        context_message = previous
     else: raise HTTPException(400, "Only user or assistant messages can be retried")
     await session.commit()
-    return {"content": content}
+    return {"content": content, **message_context_metadata(context_message)}
 
 async def model_stream(prompt: str, history: list[dict], stop_event: asyncio.Event) -> AsyncGenerator[str, None]:
     settings = get_settings()
@@ -153,6 +175,11 @@ async def model_stream(prompt: str, history: list[dict], stop_event: asyncio.Eve
 @router.post("/{cid}/messages/stream")
 async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     await conversation(cid, uid, session)
+    try:
+        validate_chat_context(payload.mode, payload.problem_id, payload.solution_language)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    problem = await resolve_problem_context(session, payload.problem_id, uid)
     handle = await runs.acquire(str(cid))
     started = time.monotonic(); first_token_ms = None
     retrieved = []
@@ -165,14 +192,30 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
                 raise HTTPException(400, "No user message available to retry")
             if user.content != payload.content:
                 user.content = payload.content
-                await session.commit()
+            user.problem_id = problem.id if problem else None
+            user.mode = payload.mode
+            user.solution_language = payload.solution_language
+            await session.commit()
         else:
-            user = Message(conversation_id=cid, role="user", content=payload.content, status="completed")
+            user = Message(
+                conversation_id=cid,
+                role="user",
+                content=payload.content,
+                status="completed",
+                problem_id=problem.id if problem else None,
+                mode=payload.mode,
+                solution_language=payload.solution_language,
+            )
             session.add(user); await session.commit()
         rows = (await session.scalars(select(Message).where(Message.conversation_id == cid, Message.id != user.id).order_by(Message.created_at))).all()
-        history = [{"role": m.role, "content": m.content} for m in rows]
+        history = trim_history(
+            [{"role": m.role, "content": m.content} for m in rows],
+            getattr(get_settings(), "chat_history_max_chars", 60_000),
+            getattr(get_settings(), "chat_history_max_messages", 30),
+        )
         try:
-            retrieved = await retrieve_chunks(session, uid, payload.content, payload.knowledge_group_ids, payload.attachment_ids)
+            retrieved = await retrieve_chunks(session, uid, cid, payload.content, payload.knowledge_group_ids, payload.attachment_ids)
+            retrieved = trim_retrieved_chunks(retrieved, getattr(get_settings(), "rag_context_max_chars", 40_000), 10)
         except Exception as error:
             logger.exception("retrieval failed", extra={"conversation_id": str(cid), "user_id": str(uid)})
             retrieval_error = error
@@ -190,14 +233,32 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
                 yield event("retrieval.failed", {"code": "RETRIEVAL_FAILED", "message": "知识库检索失败，请稍后重试"})
                 if retrieval_requested:
                     async with session_factory() as save_session:
-                        save_session.add(Message(conversation_id=cid, role="assistant", content="", status="failed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000)))
+                        save_session.add(Message(conversation_id=cid, role="assistant", content="", status="failed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language))
                         await save_session.commit()
                     yield event("run.failed", {"code": "RETRIEVAL_FAILED", "message": "知识库检索失败，请稍后重试"})
                     return
+            yield event("context.resolved", {
+                "mode": payload.mode,
+                "problem": {"id": str(problem.id), "title": problem.title, "tags": problem.tags} if problem else None,
+                "knowledge_requested": retrieval_requested,
+            })
             yield event("retrieval.completed", {"status": "failed" if retrieval_error else "ok", "count": len(retrieved), "items": [{"chunk_id": str(item.chunk_id), "score": item.score, "locator": item.locator or {}} for item in retrieved]})
-            prompt = build_context_prompt(payload.content, retrieved)
+            knowledge_context = "\n\n".join(
+                f"来源切片：{item.chunk_id}\n{item.content}" for item in retrieved
+            )
+            if payload.mode == "normal":
+                base_prompt = payload.content
+                if problem:
+                    base_prompt = f"{format_problem_context(problem)}\n\n用户问题：{payload.content}"
+                prompt = build_context_prompt(base_prompt, retrieved)
+            else:
+                prompt = build_acm_prompt(problem, payload.content, payload.mode, payload.solution_language, knowledge_context)
             async for delta in model_stream(prompt, history, handle.stop_event):
                 if await request.is_disconnected(): handle.stop_event.set(); break
+                if handle.lease:
+                    if not await handle.lease.refresh() or await handle.lease.stop_requested():
+                        handle.stop_event.set()
+                        break
                 handle.last_activity = datetime.now(UTC)
                 answer += delta
                 if first_token_ms is None:
@@ -206,22 +267,27 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
                 yield event("message.delta", {"content": delta}); yield event("ping", {})
             if answer:
                 async with session_factory() as save_session:
-                    assistant = Message(conversation_id=cid, role="assistant", content=answer, status="cancelled" if handle.stop_event.is_set() else "completed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms)
+                    cleaned_answer = sanitize_analysis_output(answer) if payload.mode == "acm_analysis" else answer
+                    assistant = Message(conversation_id=cid, role="assistant", content=cleaned_answer, status="cancelled" if handle.stop_event.is_set() else "completed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms, problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language)
                     save_session.add(assistant)
                     await save_session.flush()
-                    cleaned, citations = await persist_citations(save_session, assistant.id, answer, retrieved)
+                    cleaned, citations = await persist_citations(save_session, assistant.id, cleaned_answer, retrieved)
                     assistant.content = cleaned
                     await save_session.execute(Conversation.__table__.update().where(Conversation.id == cid).values(updated_at=func.now()))
                     await save_session.commit()
                     yield event("citations.validated", {"items": [{"chunk_id": str(c.chunk_id), "quote": c.quote, "score": c.score, "locator": c.locator} for c in citations]})
-                    yield event("message.final", {"content": cleaned})
+                    if payload.mode == "acm_solution":
+                        code = extract_solution_code(cleaned)
+                        if code:
+                            yield event("solution.validated", validate_solution_code(payload.solution_language or "", code))
+                    yield event("message.final", {"content": cleaned, "message_id": str(assistant.id), "mode": payload.mode, "problem_id": str(problem.id) if problem else None, "solution_language": payload.solution_language})
             yield event("run.interrupted" if handle.stop_event.is_set() else "run.completed", {})
         except asyncio.CancelledError:
             handle.stop_event.set(); raise
         except Exception:
             logger.exception("chat stream failed", extra={"conversation_id": str(cid), "user_id": str(uid), "prompt_length": len(payload.content), "duration_ms": round((time.monotonic() - started) * 1000)})
             async with session_factory() as save_session:
-                save_session.add(Message(conversation_id=cid, role="assistant", content="", status="failed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms))
+                save_session.add(Message(conversation_id=cid, role="assistant", content="", status="failed", model=get_settings().chat_model, duration_ms=round((time.monotonic() - started) * 1000), first_token_latency_ms=first_token_ms, problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language))
                 await save_session.commit()
             yield event("run.failed", {"code": "CHAT_PROVIDER_ERROR", "message": "生成回答失败，请稍后重试"})
         finally:
@@ -232,6 +298,8 @@ async def stream(cid: UUID, payload: ChatRequest, request: Request, uid=Depends(
 async def stop(cid, uid=Depends(current_user_id), session=Depends(get_session)):
     await conversation(cid, uid, session)
     if signal := runs.get_stop_event(str(cid)): signal.set()
+    if runs.state:
+        await runs.state.request_stop(str(cid))
     return {"status": "stopping"}
 
 @router.post("/{cid}/run/resume", status_code=202)

@@ -7,12 +7,37 @@ from sqlalchemy import delete, func, select, update
 from ..chunking import chunk_document
 from ..config import get_settings
 from ..db import session_factory
-from ..models import DocumentChunk, DocumentJob, DocumentVersion
+from ..models import Document, DocumentChunk, DocumentJob, DocumentVersion
 from ..parsers import parse_document
 from ..providers.embedding import EmbeddingProvider
 from ..storage.s3 import S3Storage
 
 logger = logging.getLogger(__name__)
+
+
+async def cleanup_deleted_document_objects(_ctx=None) -> int:
+    """Delete objects for soft-deleted documents; each attempt is durable and idempotent."""
+    cleaned = 0
+    async with session_factory() as session:
+        versions = (await session.scalars(
+            select(DocumentVersion)
+            .join(Document, DocumentVersion.document_id == Document.id)
+            .where(Document.deleted_at.is_not(None), DocumentVersion.storage_deleted_at.is_(None))
+            .order_by(DocumentVersion.storage_delete_attempts, DocumentVersion.created_at)
+            .limit(100)
+        )).all()
+        storage = S3Storage()
+        for version in versions:
+            version.storage_delete_attempts += 1
+            try:
+                await storage.delete(version.object_key)
+                version.storage_deleted_at = datetime.now(UTC)
+                version.storage_delete_error = None
+                cleaned += 1
+            except Exception as error:
+                version.storage_delete_error = str(error)[:500]
+        await session.commit()
+    return cleaned
 
 
 async def process_document(_ctx, job_id: str) -> dict:

@@ -1,17 +1,17 @@
 ﻿# CodeAtlas 浏览器与集成验证结果
 
-执行日期：2026-09-11
+执行日期：2026-09-13
 测试工具：agent-browser 与 Docker Compose
 前端：http://localhost:3000
 后端：http://localhost:8000
 
 ## 环境结果
 
-- Docker Compose 已启动前端、后端、Worker、PostgreSQL、Redis 和 MinIO。
-- Alembic current 为 0005_embedding_dimensions (head)。
+- Docker Compose 已启动前端、后端、PostgreSQL、Redis 和 MinIO；本轮未启动 Worker。
+- Alembic current 为 0007_problem_acm_workflow (head)。
 - /health、/ready、/knowledge 均返回 200。
 - 前端 Next.js 生产构建通过。
-- backend-test 测试套件 27 passed。
+- backend-test 测试套件 54 passed。
 
 ## Phase 3 结果
 
@@ -27,9 +27,12 @@
 | 引用校验 | 通过 | 仅持久化本次召回切片的有效引用 |
 | 聊天分组选择 | 通过 | knowledge_group_ids 已写入 SSE 请求 |
 | 重试一致性 | 通过 | reuse_last_user 避免重试重复创建用户消息 |
+| 题库与 ACM 后端 | 通过 | 0007 迁移已种入 5 道系统题；聊天上下文、代码静态检查、题目隔离均由 Docker 测试覆盖 |
+| 题库与 ACM 浏览器交互 | 未完成 | agent-browser 在当前 Windows 环境多次报 `CDP response channel closed`；HTTP 页面与 Docker 前端构建正常 |
 
 ## 未覆盖或限制
 
 - 尚未用浏览器完成真实 DashScope Embedding 的跨账号完整 RAG 对话回归；后端解析、检索、引用和 Worker 测试已覆盖。
 - 尚未完成移动端视口截图矩阵和 stop/resume 独立浏览器流程。
-- 当前不支持网页 URL、OCR、rerank、题库、ACM 工作流和 LangGraph checkpoint。
+- 当前不支持网页 URL、OCR、rerank、在线 OJ 和编译执行；LangGraph/checkpoint 明确留待后续阶段。
+- 浏览器交互回归未完成：agent-browser 无法建立 CDP 通道，未据此宣称 UI 操作通过。

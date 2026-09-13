@@ -40,6 +40,22 @@ async def latest_version(document: Document, session: AsyncSession) -> DocumentV
     return await session.scalar(select(DocumentVersion).where(DocumentVersion.document_id == document.id).order_by(DocumentVersion.version_no.desc()).limit(1))
 
 
+async def _lock_document_for_version(document: Document, session: AsyncSession) -> Document:
+    """Serialize version allocation for a document across concurrent uploads."""
+    locked = await session.scalar(
+        select(Document)
+        .where(
+            Document.id == document.id,
+            Document.user_id == document.user_id,
+            Document.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not locked:
+        raise HTTPException(404, "Document not found")
+    return locked
+
+
 def document_response(document: Document, version: DocumentVersion | None) -> DocumentResponse:
     return DocumentResponse(
         id=document.id, user_id=document.user_id, group_id=document.group_id, title=document.title,
@@ -114,6 +130,52 @@ async def upload_document(
     except Exception:
         logger.exception("document job dispatch failed after upload", extra={"job_id": str(job.id), "version_id": str(version.id)})
     return document_response(document, version)
+
+
+async def _upload_version(document: Document, file: UploadFile, title: str | None, session: AsyncSession) -> DocumentVersion:
+    document = await _lock_document_for_version(document, session)
+    filename = PurePath(file.filename or "document").name
+    data = await file.read(get_settings().max_upload_size_bytes + 1)
+    extension, mime_type = _validate_upload(filename, file.content_type, data)
+    max_version = await session.scalar(
+        select(func.max(DocumentVersion.version_no)).where(DocumentVersion.document_id == document.id)
+    ) or 0
+    version_no = int(max_version) + 1
+    key = object_key_for(str(document.user_id), str(document.group_id), str(document.id), version_no, filename)
+    version = DocumentVersion(
+        document_id=document.id, version_no=version_no, original_filename=filename,
+        mime_type=mime_type, extension=extension, size_bytes=len(data),
+        sha256=hashlib.sha256(data).hexdigest(), object_key=key, status="uploaded",
+    )
+    session.add(version)
+    await session.flush()
+    document.current_version_id = version.id
+    job = DocumentJob(document_version_id=version.id, stage="parsing", status="queued", attempts=0)
+    session.add(job)
+    await S3Storage().put_bytes(key, data, mime_type)
+    if title and title.strip():
+        document.title = title.strip()[:200]
+    await session.commit()
+    try:
+        await dispatch_document_job(str(job.id))
+    except Exception:
+        logger.exception("document version job dispatch failed", extra={"job_id": str(job.id)})
+    return version
+
+
+@router.post("/{document_id}/versions", response_model=DocumentVersionResponse, status_code=202)
+async def upload_document_version(
+    document_id: uuid.UUID, file: UploadFile = File(...), title: str | None = Form(None),
+    user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session),
+):
+    document = await owned_document(document_id, user_id, session)
+    return await _upload_version(document, file, title, session)
+
+
+@router.get("/{document_id}/versions", response_model=list[DocumentVersionResponse])
+async def list_document_versions(document_id: uuid.UUID, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    document = await owned_document(document_id, user_id, session)
+    return (await session.scalars(select(DocumentVersion).where(DocumentVersion.document_id == document.id).order_by(DocumentVersion.version_no.desc()))).all()
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)

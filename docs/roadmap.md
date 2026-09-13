@@ -14,9 +14,9 @@
 
 已实现分组、文件上传、MinIO、Arq 异步解析、切块、Embedding、pgvector/全文混合检索、引用校验和文档预览。当前支持 Markdown、PDF、DOCX、TXT、C/C++、Java、Python 和 HTML 文件上传，不支持网页 URL 抓取。Embedding 使用部署中 `text-embedding-v3` 的 1024 维向量。
 
-## 尚未开发：题库与 ACM 工作流
+## 已完成：题库与 ACM 工作流
 
-规划题目搜索/详情、`@` 题目选择、ACM 分析模式、语言选择和解题模式。LangGraph 与 checkpointer 只有真正接入后才能提供 checkpoint 恢复。当前明确不强制引入 LangGraph；普通聊天和 RAG 由 FastAPI 服务编排。
+已实现题目搜索/详情、系统题目种子、`@` 题目选择、ACM 分析模式、语言选择和解题模式。当前由 FastAPI 服务编排，不引入 LangGraph 和 PostgreSQL checkpoint；LangGraph/checkpoint 作为未来单独阶段。
 
 ## 长期计划
 

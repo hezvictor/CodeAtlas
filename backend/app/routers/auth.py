@@ -1,6 +1,7 @@
 ﻿from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import create_access_token, create_refresh_token, hash_password, hash_refresh_token, verify_password
@@ -12,7 +13,7 @@ from ..schemas import LoginRequest, LogoutRequest, RefreshRequest, RegisterReque
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 def token_response(user: User, refresh: str) -> TokenResponse:
-    return TokenResponse(access_token=create_access_token(user.id), refresh_token=refresh, user=UserResponse.model_validate(user))
+    return TokenResponse(access_token=create_access_token(user.id, user.auth_version), refresh_token=refresh, user=UserResponse.model_validate(user))
 
 @router.post("/register", response_model=TokenResponse, status_code=201)
 async def register(payload: RegisterRequest, session: AsyncSession = Depends(get_session)):
@@ -58,7 +59,19 @@ async def refresh(payload: RefreshRequest, session: AsyncSession = Depends(get_s
 
 @router.post("/logout", status_code=204)
 async def logout(payload: LogoutRequest, session: AsyncSession = Depends(get_session)):
-    record = await session.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(payload.refresh_token)))
+    record = await session.scalar(
+        select(RefreshToken)
+        .where(RefreshToken.token_hash == hash_refresh_token(payload.refresh_token))
+        .with_for_update()
+    )
     if record and not record.revoked_at:
         record.revoked_at = datetime.now(UTC)
+        user = await session.get(User, record.user_id)
+        if user:
+            user.auth_version += 1
+            await session.execute(
+                RefreshToken.__table__.update()
+                .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+                .values(revoked_at=func.now())
+            )
         await session.commit()

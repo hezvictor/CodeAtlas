@@ -54,4 +54,4 @@ async def test_retrieval_provider_failure_is_not_silently_converted_to_keyword_o
             raise RuntimeError("embedding provider unavailable")
 
     with pytest.raises(RuntimeError, match="embedding provider unavailable"):
-        await retrieve_chunks(Session(), uuid.uuid4(), "query", embedding_provider=Provider())
+        await retrieve_chunks(Session(), uuid.uuid4(), uuid.uuid4(), "query", [uuid.uuid4()], embedding_provider=Provider())

@@ -65,18 +65,27 @@ class ConversationUpdate(BaseModel):
 class ConversationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; created_at: datetime; updated_at: datetime
+
+
+class DashboardResponse(BaseModel):
+    today_conversation_count: int
+    recent_conversations: list[ConversationResponse]
+    latest_conversation: ConversationResponse | None
+
+
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None
-    duration_ms: int | None; first_token_latency_ms: int | None; created_at: datetime
+    duration_ms: int | None; first_token_latency_ms: int | None; problem_id: uuid.UUID | None
+    mode: str; solution_language: str | None; created_at: datetime
 class MessagePage(BaseModel):
     items: list[MessageResponse]
     has_more: bool
     next_before: datetime | None
 class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
-    mode: str = Field(default="normal", pattern="^normal$")
-    solution_language: str | None = Field(default=None, max_length=30)
+    mode: str = Field(default="normal", pattern="^(normal|acm_analysis|acm_solution)$")
+    solution_language: str | None = Field(default=None, pattern="^(cpp|java|python)$")
     attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     knowledge_group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     reuse_last_user: bool = False
@@ -89,6 +98,35 @@ class ChatRequest(BaseModel):
         if not value:
             raise ValueError("content must not be blank")
         return value
+
+
+class ProblemSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    slug: str
+    title: str
+    difficulty: str
+    tags: list[str]
+    supported_languages: list[str]
+
+
+class ProblemResponse(ProblemSummary):
+    owner_user_id: uuid.UUID | None
+    source_type: str
+    statement: str
+    input_description: str
+    output_description: str
+    examples: list[dict]
+    constraints: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProblemPage(BaseModel):
+    items: list[ProblemSummary]
+    page: int
+    page_size: int
+    total: int
 class RetryRequest(BaseModel):
     content: str | None = Field(default=None, min_length=1, max_length=20000)
 

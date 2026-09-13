@@ -1,13 +1,13 @@
 ﻿# CodeAtlas 当前开发基线
 
-版本：0.3 · 日期：2026-09-11 · 状态：Phase 3 基础能力已完成，持续验证中
+版本：0.4 · 日期：2026-09-13 · 状态：Phase 4 题库与 ACM 工作流已完成
 
 ## 阶段状态
 
 - Phase 1（账号与基础页面）：已完成。
-- Phase 2（普通会话与聊天）：已完成普通模式、SSE、持久化、停止/失败处理、重试和历史分页；未实现 ACM 工作流和 LangGraph checkpoint 恢复。
+- Phase 2（普通会话与聊天）：已完成普通模式、SSE、持久化、停止/失败处理、重试和历史分页。
 - Phase 3（私人知识库与 RAG）：基础闭环已完成，包括分组、文件上传、MinIO、Arq Worker、解析、切块、1024 维 Embedding、pgvector/全文混合检索、引用校验、预览、下载和前端知识库页面。
-- Phase 4（题库与 ACM 工作流）：尚未开始。
+- Phase 4（题库与 ACM 工作流）：已完成题库列表/详情、系统题目种子、`@` 题目关联、ACM 分析/解题模式和 C++/Java/Python 语言选择；不引入 LangGraph 和 PostgreSQL checkpoint。
 
 ## Phase 3 已实现
 
@@ -23,8 +23,8 @@
 ## 尚未实现或限制
 
 - 不支持网页 URL 抓取、OCR、表格专用解析、图片理解和 rerank。
-- 当前只提供普通聊天模式；resume 是复用持久化消息，不是 checkpoint 恢复。
-- 题库、@ 题目选择、ACM 分析/解题模式、语言选择和在线评测尚未实现。
+- `resume` 仍是复用持久化消息，不是 checkpoint 恢复。
+- 在线评测、编译执行和提交结果不在本阶段范围内；解题模式只做服务端基础静态代码检查。
 - 前端暂未提供文档版本历史和独立引用跳转视图；已提供文本预览。
 
 ## 运行与验证
@@ -36,6 +36,6 @@ docker compose up --build
 docker compose --profile test run --rm backend-test
 ```
 
-当前验证：后端 Docker 测试 27 passed；前端生产构建通过；Compose 中 PostgreSQL/Redis/MinIO/Backend/Worker/Frontend 均可启动；/health、/ready 和 /knowledge 返回 200；数据库 revision 为 0005_embedding_dimensions。
+当前验证记录为后端 Docker 测试 54 passed、前端 Docker 生产构建通过、前后端健康检查通过；本机 `next build` 因环境进程卡顿未完成。当前迁移文件链已到 `0007_problem_acm_workflow`。
 
 默认地址：前端 http://localhost:3000，后端 http://localhost:8000，MinIO 控制台 http://localhost:9001。

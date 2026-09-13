@@ -18,7 +18,7 @@
 - 邮箱唯一，应用层按小写处理。
 - 会话和消息查询强制带当前用户条件。
 - 会话按更新时间倒序，消息按创建时间正序。
-- 模式仅支持 `normal`。
+- 会话的 `mode` 字段保留兼容性；实际模式记录在每条消息上，支持 `normal`、`acm_analysis` 和 `acm_solution`。
 
 ## 已实现知识库模型
 
@@ -26,4 +26,6 @@
 
 ## 尚未实现模型
 
-尚未实现的模型包括 `problems` 和可选的 LangGraph checkpoints。当前 Phase 3 不强制引入 LangGraph。
+`problems` 将在 Phase 4 通过下一条迁移加入。系统题目使用空 `owner_user_id`，私人题目使用用户 ID；当前阶段只提供系统题目。`messages` 将增加可空的 `problem_id`、`mode` 和 `solution_language`。
+
+本阶段不引入 LangGraph checkpoints；checkpoint 属于后续单独阶段。

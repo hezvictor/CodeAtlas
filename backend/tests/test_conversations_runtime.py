@@ -145,6 +145,9 @@ async def test_stream_failure_records_metrics_and_persists_failed_message(monkey
         assert failed.content == ""
         assert failed.first_token_latency_ms is None
         assert isinstance(failed.duration_ms, int)
+        assert failed.problem_id is None
+        assert failed.mode == "normal"
+        assert failed.solution_language is None
         assert not conversations_module.runs.is_running(str(cid))
     finally:
         app.dependency_overrides.clear()

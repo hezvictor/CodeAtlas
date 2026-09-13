@@ -30,7 +30,7 @@ API 前缀：`/api/v1`。除注册、登录、刷新和健康检查外，接口�
 | GET/POST/DELETE | `/conversations/{id}/attachments` | 管理会话文档附件 |
 | GET | `/conversations/{id}/messages/{message_id}/citations` | 查询已验证引用 |
 
-模式当前只接受 `normal`。聊天内容去空白后长度为 1 到 20000。knowledge_group_ids 选择检索分组，attachment_ids 选择已挂载文档；题目字段仍只做协议保留。重试内部使用 reuse_last_user 避免重复写入用户消息。
+聊天模式支持 `normal`、`acm_analysis` 和 `acm_solution`。`acm_solution` 的 `solution_language` 支持 `cpp`、`java`、`python`。聊天内容去空白后长度为 1 到 20000。`knowledge_group_ids` 选择检索分组，`attachment_ids` 选择已挂载文档；`problem_id` 选择当前题库题目。重试内部使用 `reuse_last_user` 避免重复写入用户消息。
 
 SSE 当前事件为 `run.started`、`retrieval.completed`、`retrieval.failed`、`run.first_token`、`message.delta`、`citations.validated`、`message.final`、`ping`、`run.interrupted`、`run.completed`、`run.failed`。知识库检索由请求中的 `knowledge_group_ids` 和 `attachment_ids` 控制；指定知识范围时检索失败会发送 `retrieval.failed` 并终止生成，未指定范围时会明确标记失败后继续普通聊天；引用只接受本次召回切片。消息支持 `completed`、`cancelled`、`failed` 状态；重新生成或编辑重试会删除目标消息及其后续消息后重新生成。
 
@@ -40,8 +40,18 @@ SSE 当前事件为 `run.started`、`retrieval.completed`、`retrieval.failed`�
 {"code":"VALIDATION_ERROR","message":"请求参数不合法","details":{}}
 ```
 
+## 题库与首页接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/problems` | 按关键词、难度、标签分页查询当前用户可见题目 |
+| GET | `/problems/{id}` | 查询题目详情 |
+| GET | `/dashboard` | 查询首页真实会话统计和最近会话 |
+
+题目查询返回系统题目和当前用户拥有的私人题目。ACM 分析模式必须提供 `problem_id`；ACM 解题模式必须同时提供 `problem_id` 和支持的编程语言。题目不存在或不属于当前用户时返回 404。
+
 ## 尚未实现接口
 
-题库搜索、题目详情、ACM 分析和在线评测接口尚未注册。知识库接口已注册并以上表为准。
+在线评测接口尚未注册。知识库接口已注册并以上表为准。
 
 所有资源必须由服务端根据 token 中的用户 ID 过滤。

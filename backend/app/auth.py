@@ -17,10 +17,17 @@ def verify_password(password: str, password_hash: str) -> bool:
     except Exception:
         return False
 
-def create_access_token(user_id: uuid.UUID) -> str:
+def create_access_token(user_id: uuid.UUID, auth_version: int = 1) -> str:
     settings = get_settings()
     now = datetime.now(UTC)
-    claims = {"sub": str(user_id), "type": "access", "iat": now, "exp": now + timedelta(minutes=settings.access_token_expire_minutes)}
+    claims = {
+        "sub": str(user_id),
+        "type": "access",
+        "auth_version": auth_version,
+        "jti": str(uuid.uuid4()),
+        "iat": now,
+        "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
+    }
     return jwt.encode(claims, settings.jwt_secret_key, algorithm="HS256")
 
 def create_refresh_token() -> tuple[str, str, datetime]:

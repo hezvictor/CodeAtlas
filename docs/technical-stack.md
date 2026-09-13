@@ -12,7 +12,7 @@
 | 后端 | Python、FastAPI、Pydantic | API、鉴权、上传和流式接口 |
 | Agent | FastAPI 服务编排 | 当前不强制引入 LangGraph；未来可选接入 |
 | 数据库 | PostgreSQL + pgvector | 业务数据、消息、文档元数据和向量检索 |
-| 检查点 | 未启用 | resume 当前复用持久化消息，不是 checkpoint 恢复 |
+| 检查点 | 未启用 | resume 当前复用持久化消息，不是 checkpoint 恢复；后续阶段再评估 PostgreSQL checkpoint |
 | 异步任务 | Redis + Arq | 文档解析、切块和 Embedding Worker |
 | 文件存储 | S3 兼容存储；开发环境 MinIO | 保存原始文档和版本文件 |
 | 模型 | 阿里云百炼 OpenAI 兼容接口 | 当前聊天模型和 embedding 模型 |
@@ -91,7 +91,9 @@ ACM 模式建议节点：`classify_mode -> extract_problem -> retrieve_problem_c
 - `GET/POST /conversations/{id}/messages`：SSE 返回流式事件
 - `POST /conversations/{id}/stop`、`POST /conversations/{id}/resume`
 - `GET/POST/PATCH/DELETE /knowledge/documents`
-- `GET /problems/search`：为 `@` 选择器提供题目搜索
+- `GET /problems`：题库列表和 `@` 选择器题目搜索
+- `GET /problems/{id}`：题目详情
+- `GET /dashboard`：首页真实会话数据
 
 知识库实际路径和 SSE 事件以 [api-contract.md](api-contract.md) 为准；题库路径仍为规划。
 

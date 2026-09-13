@@ -18,6 +18,8 @@ from .routers.users import router as users_router
 from .routers.knowledge_groups import router as knowledge_groups_router
 from .routers.knowledge_documents import router as knowledge_documents_router
 from .routers.attachments import router as attachments_router
+from .routers.problems import router as problems_router
+from .routers.dashboard import router as dashboard_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -50,8 +52,11 @@ async def _validate_embedding_database() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    from .routers.conversations import runs
+    from .routers.conversations import configure_run_state, runs
+    from redis.asyncio import from_url
     await _validate_embedding_database()
+    redis_client = from_url(settings.redis_url, decode_responses=True)
+    configure_run_state(redis_client)
     cleanup_task = asyncio.create_task(_cleanup_runs(runs))
     logger.info("CodeAtlas backend starting in %s environment", settings.app_env)
     try:
@@ -59,6 +64,7 @@ async def lifespan(_: FastAPI):
     finally:
         cleanup_task.cancel()
         await asyncio.gather(cleanup_task, return_exceptions=True)
+        await redis_client.aclose()
         logger.info("CodeAtlas backend stopped")
 
 
@@ -92,6 +98,8 @@ app.include_router(users_router, prefix="/api/v1")
 app.include_router(knowledge_groups_router, prefix="/api/v1")
 app.include_router(knowledge_documents_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
+app.include_router(problems_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])
