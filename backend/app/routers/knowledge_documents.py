@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 import logging
 import mimetypes
 import uuid
@@ -27,6 +27,24 @@ _MIME_BY_EXTENSION = {
     ".cpp": "text/x-c++src", ".h": "text/x-c", ".hpp": "text/x-c++hdr",
     ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
+
+_FORMAT_DESCRIPTION = "支持 Markdown、PDF、DOCX、TXT、C/C++、Java、Python、HTML 文件"
+
+
+def upload_policy() -> dict:
+    """Return the effective upload policy used by server-side validation."""
+    settings = get_settings()
+    return {
+        "extensions": sorted(settings.allowed_document_extensions),
+        "max_size_bytes": settings.max_upload_size_bytes,
+        "format_description": _FORMAT_DESCRIPTION,
+    }
+
+
+def _upload_error(status_code: int, code: str, message: str, english: str) -> HTTPException:
+    # Keep a stable machine-readable code while retaining a useful message for
+    # existing clients that displayed the old English detail string.
+    return HTTPException(status_code, {"code": code, "message": f"{english}：{message}"})
 
 
 async def owned_document(document_id: uuid.UUID, user_id: uuid.UUID, session: AsyncSession) -> Document:
@@ -68,21 +86,26 @@ def _validate_upload(filename: str, content_type: str | None, data: bytes) -> tu
     extension = PurePath(filename).suffix.lower()
     settings = get_settings()
     if extension not in settings.allowed_document_extensions:
-        raise HTTPException(400, "Unsupported document type")
+        raise _upload_error(400, "UNSUPPORTED_EXTENSION", f"不支持 {extension or '该'} 文件格式", "Unsupported document type")
     if len(data) > settings.max_upload_size_bytes:
-        raise HTTPException(413, "Document is too large")
+        raise _upload_error(413, "FILE_TOO_LARGE", f"文件大小不能超过 {settings.max_upload_size_bytes} 字节", "Document is too large")
     declared = content_type or "application/octet-stream"
     expected = _MIME_BY_EXTENSION.get(extension, declared)
     if declared != "application/octet-stream" and declared != expected:
         if not (expected.startswith("text/") and declared.startswith("text/")):
-            raise HTTPException(400, "MIME type does not match file extension")
+            raise _upload_error(400, "MIME_MISMATCH", "文件类型与扩展名不匹配", "MIME type does not match file extension")
     if extension == ".pdf" and not data.startswith(b"%PDF"):
-        raise HTTPException(400, "Uploaded file is not a valid PDF")
+        raise _upload_error(400, "INVALID_FILE_HEADER", "文件头不是有效的 PDF", "Uploaded file is not a valid PDF")
     if extension == ".docx" and not data.startswith(b"PK"):
-        raise HTTPException(400, "Uploaded file is not a valid DOCX")
+        raise _upload_error(400, "INVALID_FILE_HEADER", "文件头不是有效的 DOCX", "Uploaded file is not a valid DOCX")
     if extension in {".html", ".htm"} and b"<" not in data[:4096]:
-        raise HTTPException(400, "Uploaded file is not a valid HTML document")
+        raise _upload_error(400, "INVALID_FILE_HEADER", "文件内容不是有效的 HTML 文档", "Uploaded file is not a valid HTML document")
     return extension, expected
+
+
+@router.get("/policy")
+async def get_upload_policy():
+    return upload_policy()
 
 
 @router.get("", response_model=list[DocumentResponse])

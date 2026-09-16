@@ -37,6 +37,7 @@ class Conversation(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
     mode: Mapped[str] = mapped_column(String(30), default="normal")
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -47,6 +48,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String(20), default="completed")
+    retrieved_chunk_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'"))
     model: Mapped[str | None] = mapped_column(String(100))
     duration_ms: Mapped[int | None] = mapped_column()
     first_token_latency_ms: Mapped[int | None] = mapped_column()

@@ -1,4 +1,5 @@
 ﻿import uuid
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -11,6 +12,41 @@ from app.main import app
 from app.models import Conversation
 from app.routers import conversations as conversations_module
 from app.routers.conversations import RunRegistry
+
+
+@pytest.mark.asyncio
+async def test_registry_start_keeps_run_after_subscriber_disconnects():
+    registry = RunRegistry()
+
+    async def runner(_handle):
+        yield "hello"
+        yield " world"
+
+    run_id = await registry.start("conversation-1", runner)
+    await asyncio.sleep(0.01)
+    record = registry.get_record("conversation-1", run_id)
+    assert record is not None
+    assert record.status == "completed"
+    assert record.content == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_registry_snapshot_contains_partial_content_for_reconnect():
+    registry = RunRegistry()
+    gate = asyncio.Event()
+
+    async def runner(_handle):
+        yield "partial"
+        await gate.wait()
+
+    run_id = await registry.start("conversation-2", runner)
+    await asyncio.sleep(0.01)
+    record = registry.get_record("conversation-2", run_id)
+    assert record is not None
+    assert registry.snapshot(record)["content"] == "partial"
+    record.handle.stop_event.set()
+    gate.set()
+    await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -64,6 +100,15 @@ class _FakeSession:
         return _Rows()
 
     async def execute(self, _statement):
+        return None
+
+    async def flush(self):
+        return None
+
+    async def refresh(self, _instance):
+        return None
+
+    async def get(self, _model, _id):
         return None
 
     async def commit(self):
