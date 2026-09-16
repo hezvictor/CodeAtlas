@@ -16,7 +16,7 @@ from ..db import get_session, session_factory
 from ..dependencies import current_user_id
 from ..models import Citation, Conversation, Message
 from ..chat_rag import build_context_prompt
-from ..citations import persist_citations
+from ..citations import citation_sources, persist_citations
 from ..acm_workflow import build_acm_prompt, sanitize_analysis_output
 from ..code_validation import extract_solution_code, validate_solution_code
 from ..services.problem_context import format_problem_context, message_context_metadata, resolve_problem_context, validate_chat_context
@@ -421,6 +421,11 @@ async def resume(cid, uid=Depends(current_user_id), session=Depends(get_session)
 
 @router.get("/{cid}/messages/{mid}/citations")
 async def message_citations(cid: UUID, mid: UUID, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    """Return validated citations with the document metadata the UI renders.
+
+    The payload is deliberately richer than the raw citation rows: the answer
+    panel needs the document title, group name and filename for every source.
+    """
     await conversation(cid, uid, session)
-    rows = (await session.scalars(select(Citation).join(Message, Citation.message_id == Message.id).where(Message.id == mid, Message.conversation_id == cid, Citation.is_valid.is_(True)).order_by(Citation.rank))).all()
-    return [{"id": str(row.id), "chunk_id": str(row.chunk_id), "quote": row.quote, "score": row.score, "rank": row.rank, "locator": row.locator} for row in rows]
+    rows = await citation_sources(session, mid, cid, uid)
+    return [{**row, "original_filename": row["original_filename"], "file_name": row["original_filename"], "explicitly_cited": True} for row in rows]

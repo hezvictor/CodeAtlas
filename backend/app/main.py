@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -77,7 +78,11 @@ async def http_error_handler(_: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(_: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"code": "VALIDATION_ERROR", "message": "请求参数不合法", "details": exc.errors()})
+    # Pydantic embeds live exception objects in error "ctx" values (for example when a model
+    # validator raises ValueError), which json.dumps cannot serialize. Encode them so a
+    # validation failure still returns 422 instead of crashing into a 500.
+    details = jsonable_encoder(exc.errors(), custom_encoder={Exception: str})
+    return JSONResponse(status_code=422, content={"code": "VALIDATION_ERROR", "message": "请求参数不合法", "details": details})
 
 
 @app.middleware("http")

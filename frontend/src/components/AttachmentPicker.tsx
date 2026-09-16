@@ -20,6 +20,7 @@ export default function AttachmentPicker({ conversationId, token, onChange, disa
   const [items, setItems] = useState<Attachment[]>([]);
   const [versions, setVersions] = useState<{ id: string; name: string }[]>([]);
   const refresh = async () => {
+    if (!conversationId) { setItems([]); onChange([]); return; }
     const response = await apiFetch(`${API}/conversations/${conversationId}/attachments`, { headers: { Authorization: `Bearer ${token}` } });
     const data = await response.json();
     if (Array.isArray(data)) { setItems(data); onChange(data.map((item: Attachment) => item.id)); }
