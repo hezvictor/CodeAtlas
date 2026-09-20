@@ -148,8 +148,8 @@ class _FakeSessionFactory:
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_records_metrics_and_persists_failed_message(monkeypatch):
-    """聊天模型未配置时，SSE 必须回传 run.failed，并落库一条带耗时的失败助手消息。"""
+async def test_stream_rejects_requests_when_no_verified_model_exists(monkeypatch):
+    """没有已验证模型时，请求必须在创建消息或 run 前被拒绝。"""
 
     cid, uid = uuid.uuid4(), uuid.uuid4()
     request_session = _FakeSession(Conversation(id=cid, user_id=uid, title="新对话", mode="normal"))
@@ -175,24 +175,9 @@ async def test_stream_failure_records_metrics_and_persists_failed_message(monkey
                 json={"content": "这道题的最短路为什么超时？"},
             )
 
-        assert response.status_code == 200
-        body = response.text
-        assert "event: run.started" in body
-        assert "event: retrieval.completed" in body
-        assert "event: run.failed" in body
-        assert "CHAT_PROVIDER_ERROR" in body
-
-        persisted = [message for session in saved_sessions for message in session.added]
-        assert persisted, "失败路径必须落库一条助手消息"
-        failed = persisted[-1]
-        assert failed.role == "assistant"
-        assert failed.status == "failed"
-        assert failed.content == ""
-        assert failed.first_token_latency_ms is None
-        assert isinstance(failed.duration_ms, int)
-        assert failed.problem_id is None
-        assert failed.mode == "normal"
-        assert failed.solution_language is None
+        assert response.status_code == 409
+        assert "configure and verify" in response.text
+        assert not request_session.added
         assert not conversations_module.runs.is_running(str(cid))
     finally:
         app.dependency_overrides.clear()
@@ -218,7 +203,10 @@ async def test_scoped_retrieval_failure_does_not_fall_back_to_chat(monkeypatch):
     app.dependency_overrides[current_user_id] = lambda: uid
     monkeypatch.setattr(conversations_module, "session_factory", _FakeSessionFactory(saved_sessions))
     monkeypatch.setattr(conversations_module, "retrieve_chunks", fail_retrieval)
-    monkeypatch.setattr(conversations_module, "model_stream", unexpected_model_stream)
+    monkeypatch.setattr(conversations_module, "embedding_config_is_verified", lambda _config: True)
+    async def verified_model(*_args, **_kwargs):
+        return SimpleNamespace(id=uuid.uuid4(), name="verified-model"), SimpleNamespace()
+    monkeypatch.setattr(conversations_module, "resolve_chat_model", verified_model)
 
     try:
         transport = httpx.ASGITransport(app=app)
@@ -229,7 +217,7 @@ async def test_scoped_retrieval_failure_does_not_fall_back_to_chat(monkeypatch):
             )
 
         assert response.status_code == 200
-        assert "event: retrieval.failed" in response.text
+        assert "event: retrieval.completed" in response.text
         assert "RETRIEVAL_FAILED" in response.text
         assert "event: run.failed" in response.text
     finally:

@@ -21,6 +21,7 @@ from .routers.knowledge_documents import router as knowledge_documents_router
 from .routers.attachments import router as attachments_router
 from .routers.problems import router as problems_router
 from .routers.dashboard import router as dashboard_router
+from .routers.model_connections import router as model_connections_router, utility_router as model_utility_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -103,6 +104,8 @@ app.include_router(users_router, prefix="/api/v1")
 app.include_router(knowledge_groups_router, prefix="/api/v1")
 app.include_router(knowledge_documents_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
+app.include_router(model_utility_router, prefix="/api/v1")
+app.include_router(model_connections_router, prefix="/api/v1")
 app.include_router(problems_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 

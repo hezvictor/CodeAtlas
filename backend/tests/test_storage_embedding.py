@@ -2,10 +2,10 @@ from app.providers.embedding import validate_embedding_vectors
 from app.storage.s3 import object_key_for
 
 
-def test_object_key_contains_user_group_document_and_version_without_path_traversal():
+def test_object_key_contains_scope_document_and_version_without_path_traversal():
     key = object_key_for("u", "g", "d", 2, "../../notes.md")
 
-    assert key.startswith("users/u/groups/g/documents/d/versions/2/")
+    assert key.startswith("users/u/scopes/g/documents/d/versions/2/")
     assert ".." not in key
     assert key.endswith("notes.md")
 

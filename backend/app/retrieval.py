@@ -21,7 +21,14 @@ def rrf_merge(keyword: list[RankedChunk], vector: list[RankedChunk], limit: int 
         by_id.setdefault(item.chunk_id, item)
         scores[item.chunk_id] = scores.get(item.chunk_id, 0) + 1 / (k + rank)
     order = {chunk_id: index for index, chunk_id in enumerate(by_id)}
-    ranked_ids = sorted(scores, key=lambda chunk_id: (-scores[chunk_id], order[chunk_id]))[:limit]
+    ranked_ids = sorted(
+        scores,
+        key=lambda chunk_id: (
+            -scores[chunk_id]
+            - (1 / (k * k) if by_id[chunk_id].source_type == "session" else 0),
+            order[chunk_id],
+        ),
+    )[:limit]
     for chunk_id in ranked_ids:
         by_id[chunk_id].score = scores[chunk_id]
     return [by_id[chunk_id] for chunk_id in ranked_ids]

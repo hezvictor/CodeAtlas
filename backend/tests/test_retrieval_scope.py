@@ -17,7 +17,7 @@ async def test_empty_scope_skips_database_and_embedding():
 
     assert (
         await retrieve_chunks(
-            ExplodingSession(), uuid.uuid4(), uuid.uuid4(), "query", embedding_provider=ExplodingProvider()
+            ExplodingSession(), uuid.uuid4(), uuid.uuid4(), "query", knowledge_scope="none", embedding_provider=ExplodingProvider()
         )
         == []
     )

@@ -55,7 +55,7 @@ async def citation_sources(
         .join(DocumentChunk, Citation.chunk_id == DocumentChunk.id)
         .join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id)
         .join(Document, DocumentVersion.document_id == Document.id)
-        .join(KnowledgeGroup, Document.group_id == KnowledgeGroup.id)
+        .outerjoin(KnowledgeGroup, Document.group_id == KnowledgeGroup.id)
         .where(
             Citation.message_id == message_id,
             Message.conversation_id == conversation_id,
@@ -73,8 +73,9 @@ async def citation_sources(
             "document_id": document.id,
             "document_title": document.title,
             "original_filename": version.original_filename,
-            "group_id": group.id,
-            "group_name": group.name,
+            "group_id": group.id if group else None,
+            "group_name": group.name if group else None,
+            "source_scope": document.scope,
             "quote": citation.quote,
             "score": citation.score,
             "rank": citation.rank,

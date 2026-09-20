@@ -24,6 +24,21 @@ def test_rrf_merge_populates_combined_score_for_citations():
     assert result[0].score > 0
 
 
+def test_rrf_merge_prefers_session_file_when_relevance_is_tied():
+    from app.retrieval import RankedChunk, rrf_merge
+
+    long_term, session_file = uuid.uuid4(), uuid.uuid4()
+    result = rrf_merge(
+        [
+            RankedChunk(long_term, "long term", 0.0, source_type="long_term"),
+            RankedChunk(session_file, "session", 0.0, source_type="session"),
+        ],
+        [],
+    )
+
+    assert [item.chunk_id for item in result] == [session_file, long_term]
+
+
 def test_citation_validator_removes_unknown_markers_and_returns_valid_ids():
     from app.citations import validate_citations
 
@@ -46,6 +61,9 @@ async def test_retrieval_provider_failure_is_not_silently_converted_to_keyword_o
             return []
 
     class Session:
+        async def scalars(self, _statement):
+            return EmptyResult()
+
         async def execute(self, _statement):
             return EmptyResult()
 

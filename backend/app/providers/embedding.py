@@ -3,8 +3,12 @@ import logging
 import time
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..models import EmbeddingConfig
+from ..security.provider_credentials import decrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -49,3 +53,32 @@ class EmbeddingProvider:
     async def embed_query(self, text: str) -> list[float]:
         vectors = await self.embed_documents([text])
         return vectors[0]
+
+
+class UserEmbeddingProvider(EmbeddingProvider):
+    def __init__(self, session: AsyncSession, user_id):
+        self.session = session
+        self.user_id = user_id
+
+    async def _config(self) -> EmbeddingConfig:
+        config = await self.session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == self.user_id))
+        if not config:
+            raise RuntimeError("embedding provider is not configured")
+        return config
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        config = await self._config()
+        settings = get_settings()
+        key = decrypt_secret(config.api_key_ciphertext, config.api_key_nonce)
+        body = {"model": config.model_name or settings.embedding_model, "input": texts}
+        timeout = httpx.Timeout(120, connect=10)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                settings.dashscope_base_url.rstrip("/") + "/embeddings",
+                headers={"Authorization": f"Bearer {key}"},
+                json=body,
+            )
+            response.raise_for_status()
+        data = response.json().get("data") or []
+        vectors = [item.get("embedding") for item in sorted(data, key=lambda item: item.get("index", 0))]
+        return validate_embedding_vectors(vectors, len(texts), settings.embedding_dimensions)

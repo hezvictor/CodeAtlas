@@ -1,5 +1,14 @@
-from arq import cron
-from arq.connections import RedisSettings
+try:
+    from arq import cron
+    from arq.connections import RedisSettings
+except ImportError:  # Worker commands still require arq; importing API settings should not.
+    def cron(function, **_kwargs):
+        return function
+
+    class RedisSettings:
+        @classmethod
+        def from_dsn(cls, value):
+            return value
 
 from .config import get_settings
 from .queue import dispatch_pending_document_jobs, recover_stale_document_jobs

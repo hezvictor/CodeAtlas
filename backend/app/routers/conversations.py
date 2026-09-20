@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session, session_factory
 from ..dependencies import current_user_id
-from ..models import Citation, Conversation, Message
+from ..models import ChatModel, Citation, Conversation, EmbeddingConfig, Message, ModelConnection, User
 from ..chat_rag import build_context_prompt
 from ..citations import citation_sources, persist_citations
 from ..acm_workflow import build_acm_prompt, sanitize_analysis_output
@@ -24,6 +24,9 @@ from ..services.retrieval_service import retrieve_chunks
 from ..services.context_budget import trim_history, trim_retrieved_chunks
 from ..services.run_state import RunLease, RunState
 from ..schemas import BulkConversationRequest, ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate, MessagePage, MessageResponse, RetryRequest
+from ..providers.openai_compatible import OpenAICompatibleChatProvider
+from ..providers.embedding import UserEmbeddingProvider
+from ..security.provider_credentials import decrypt_secret
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 logger = logging.getLogger(__name__)
@@ -180,6 +183,34 @@ async def conversation(cid: UUID, uid: UUID, session: AsyncSession):
     if not item: raise HTTPException(404, "Conversation not found")
     return item
 
+
+async def resolve_chat_model(session: AsyncSession, conversation: Conversation, user_id: UUID, requested_id: UUID | None):
+    model_id = requested_id or getattr(conversation, "selected_chat_model_id", None)
+    if not model_id:
+        user = await session.get(User, user_id)
+        model_id = getattr(user, "default_chat_model_id", None) if user else None
+    if model_id:
+        row = await session.execute(
+            select(ChatModel, ModelConnection)
+            .join(ModelConnection, ChatModel.connection_id == ModelConnection.id)
+            .where(
+                ChatModel.id == model_id,
+                ModelConnection.user_id == user_id,
+                ModelConnection.status == "active",
+                ChatModel.status == "verified",
+            )
+        )
+        result = row.first() if row is not None else None
+        if result:
+            return result[0], result[1]
+        if requested_id or getattr(conversation, "selected_chat_model_id", None):
+            raise HTTPException(409, "Selected chat model is unavailable")
+    raise HTTPException(409, "Please configure and verify a chat model before sending")
+
+
+def embedding_config_is_verified(config: EmbeddingConfig | None) -> bool:
+    return config is not None and config.status == "verified"
+
 def event(name: str, data: dict) -> str: return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 @router.get("", response_model=list[ConversationResponse])
@@ -288,7 +319,8 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
     The work is deliberately not performed by the response generator: closing a
     browser tab only removes one subscriber and does not stop the model run.
     """
-    await conversation(cid, uid, session)
+    conversation_item = await conversation(cid, uid, session)
+    selected_chat_model, selected_connection = await resolve_chat_model(session, conversation_item, uid, payload.chat_model_id)
     try:
         validate_chat_context(payload.mode, payload.problem_id, payload.solution_language)
     except ValueError as error:
@@ -296,7 +328,10 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
 
     problem = await resolve_problem_context(session, payload.problem_id, uid)
     started = time.monotonic()
-    retrieval_requested = payload.knowledge_scope != "none" or bool(payload.attachment_ids)
+    embedding_config = await session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == uid))
+    retrieval_requested = embedding_config_is_verified(embedding_config) and (
+        payload.knowledge_scope != "none" or bool(payload.attachment_ids)
+    )
     retrieved = []
     retrieval_error: Exception | None = None
     if payload.reuse_last_user:
@@ -314,12 +349,27 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
     rows = (await session.scalars(select(Message).where(Message.conversation_id == cid, Message.id != user.id).order_by(Message.created_at))).all()
     history = trim_history([{"role": item.role, "content": item.content} for item in rows], getattr(get_settings(), "chat_history_max_chars", 60_000), getattr(get_settings(), "chat_history_max_messages", 30))
     try:
-        retrieved = await retrieve_chunks(session, uid, cid, payload.content, payload.knowledge_group_ids, payload.attachment_ids, knowledge_scope=payload.knowledge_scope)
-        retrieved = trim_retrieved_chunks(retrieved, getattr(get_settings(), "rag_context_max_chars", 40_000), 10)
+        if retrieval_requested:
+            retrieved = await retrieve_chunks(
+                session,
+                uid,
+                cid,
+                payload.content,
+                payload.knowledge_group_ids,
+                payload.attachment_ids,
+                knowledge_scope=payload.knowledge_scope,
+                embedding_provider=UserEmbeddingProvider(session, uid),
+            )
+            retrieved = trim_retrieved_chunks(
+                retrieved, getattr(get_settings(), "rag_context_max_chars", 40_000), 10
+            )
     except Exception as error:
         logger.exception("retrieval failed", extra={"conversation_id": str(cid), "user_id": str(uid)})
         retrieval_error = error
-    assistant = Message(conversation_id=cid, role="assistant", content="", status="generating", model=get_settings().chat_model, problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language, retrieved_chunk_ids=[str(item.chunk_id) for item in retrieved])
+    selected_model_name = selected_chat_model.name
+    if selected_chat_model.id != getattr(conversation_item, "selected_chat_model_id", None):
+        conversation_item.selected_chat_model_id = selected_chat_model.id
+    assistant = Message(conversation_id=cid, role="assistant", content="", status="generating", model=selected_model_name, chat_model_id=selected_chat_model.id, model_name_snapshot=selected_model_name, problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language, retrieved_chunk_ids=[str(item.chunk_id) for item in retrieved])
     session.add(assistant)
     await session.commit()
     await session.refresh(assistant)
@@ -356,7 +406,11 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
                 prompt = build_context_prompt(base_prompt, retrieved)
             else:
                 prompt = build_acm_prompt(problem, payload.content, payload.mode, payload.solution_language, knowledge_context)
-            async for delta in model_stream(prompt, history, handle.stop_event):
+            key = decrypt_secret(selected_connection.api_key_ciphertext, selected_connection.api_key_nonce)
+            provider_stream = OpenAICompatibleChatProvider(selected_connection.base_url, key).stream_chat(
+                history + [{"role": "user", "content": prompt}], selected_chat_model.name, handle.stop_event
+            )
+            async for delta in provider_stream:
                 if handle.lease and (not await handle.lease.refresh() or await handle.lease.stop_requested()):
                     handle.stop_event.set()
                     break

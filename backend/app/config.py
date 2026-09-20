@@ -32,8 +32,9 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     chat_model: str = ""
-    embedding_model: str = ""
+    embedding_model: str = "text-embedding-v3"
     embedding_dimensions: int = 1024
+    model_credential_encryption_key: str = ""
     max_upload_size_bytes: int = 20 * 1024 * 1024
     max_extracted_text_chars: int = 2_000_000
     document_job_max_attempts: int = 3

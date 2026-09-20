@@ -4,7 +4,6 @@ from .base import ParsedBlock, ParsedDocument
 from .code import parse_code
 from .docx import parse_docx
 from .html import parse_html
-from .pdf import parse_pdf
 from .text import parse_text
 
 
@@ -13,6 +12,8 @@ def parse_document(filename: str, mime_type: str, data: bytes) -> ParsedDocument
     if extension in {".html", ".htm"} or mime_type == "text/html":
         return parse_html(data)
     if extension == ".pdf" or mime_type == "application/pdf":
+        from .pdf import parse_pdf
+
         return parse_pdf(data)
     if extension == ".docx" or mime_type in {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}:
         return parse_docx(data)

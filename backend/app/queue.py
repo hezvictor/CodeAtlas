@@ -1,8 +1,12 @@
 import logging
 from datetime import UTC, datetime, timedelta
 
-from arq import create_pool
-from arq.connections import RedisSettings
+try:
+    from arq import create_pool
+    from arq.connections import RedisSettings
+except ImportError:  # Keep API imports usable when the optional worker runtime is absent.
+    create_pool = None
+    RedisSettings = None
 from sqlalchemy import select, update
 
 from .config import get_settings
@@ -14,7 +18,10 @@ _DISPATCH_LEASE_SECONDS = 30
 
 
 async def enqueue_document_job(job_id: str) -> None:
-    pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+    if create_pool is None:
+        raise RuntimeError("document worker dependencies are not installed")
+    settings = RedisSettings.from_dsn(get_settings().redis_url) if RedisSettings else get_settings().redis_url
+    pool = await create_pool(settings)
     try:
         await pool.enqueue_job("process_document", job_id, _job_id=f"document-job:{job_id}")
     finally:

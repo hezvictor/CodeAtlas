@@ -7,9 +7,9 @@ from sqlalchemy import delete, func, select, update
 from ..chunking import chunk_document
 from ..config import get_settings
 from ..db import session_factory
-from ..models import Document, DocumentChunk, DocumentJob, DocumentVersion
+from ..models import Document, DocumentChunk, DocumentJob, DocumentVersion, EmbeddingConfig
 from ..parsers import parse_document
-from ..providers.embedding import EmbeddingProvider
+from ..providers.embedding import UserEmbeddingProvider
 from ..storage.s3 import S3Storage
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,21 @@ async def process_document(_ctx, job_id: str) -> dict:
             job.status, job.finished_at = "failed", datetime.now(UTC)
             await session.commit()
             return {"status": "missing", "job_id": job_id}
+        document = await session.get(Document, version.document_id)
+        if not document:
+            job.status, job.finished_at = "failed", datetime.now(UTC)
+            await session.commit()
+            return {"status": "missing", "job_id": job_id}
+        embedding_config = await session.scalar(
+            select(EmbeddingConfig).where(EmbeddingConfig.user_id == document.user_id)
+        )
+        if not embedding_config or embedding_config.status != "verified":
+            version.status = "waiting_embedding"
+            job.status, job.stage = "waiting_embedding", "embedding"
+            job.locked_at, job.locked_by = None, None
+            job.error_message = "Embedding configuration is not verified"
+            await session.commit()
+            return {"status": "waiting_embedding", "version_id": str(version.id), "job_id": job_id}
         try:
             version.status = "parsing"
             await session.commit()
@@ -76,7 +91,7 @@ async def process_document(_ctx, job_id: str) -> dict:
             await session.flush()
             version.status = "embedding"
             await session.commit()
-            vectors = await EmbeddingProvider().embed_documents([chunk.content for chunk in chunks]) if chunks else []
+            vectors = await UserEmbeddingProvider(session, document.user_id).embed_documents([chunk.content for chunk in chunks]) if chunks else []
             for record, vector in zip(records, vectors, strict=True):
                 record.embedding = vector
             await session.flush()

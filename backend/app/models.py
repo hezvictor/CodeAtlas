@@ -17,6 +17,7 @@ class User(Base):
     nickname: Mapped[str] = mapped_column(String(80))
     avatar_url: Mapped[str | None] = mapped_column(String(500))
     auth_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    default_chat_model_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     def __init__(self, **kwargs):
@@ -38,6 +39,7 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(200), default="新对话")
     mode: Mapped[str] = mapped_column(String(30), default="normal")
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    selected_chat_model_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -50,6 +52,8 @@ class Message(Base):
     status: Mapped[str] = mapped_column(String(20), default="completed")
     retrieved_chunk_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'"))
     model: Mapped[str | None] = mapped_column(String(100))
+    chat_model_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    model_name_snapshot: Mapped[str | None] = mapped_column(String(200))
     duration_ms: Mapped[int | None] = mapped_column()
     first_token_latency_ms: Mapped[int | None] = mapped_column()
     problem_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("problems.id", ondelete="SET NULL"), index=True)
@@ -100,12 +104,14 @@ class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         Index("ix_documents_user_group_updated", "user_id", "group_id", "updated_at"),
+        Index("ix_documents_user_scope_updated", "user_id", "scope", "updated_at"),
         Index("ix_documents_user_id", "user_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge_groups.id", ondelete="CASCADE"), nullable=False)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("knowledge_groups.id", ondelete="SET NULL"), nullable=True)
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, default="long_term", server_default="long_term")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -194,6 +200,9 @@ class Citation(Base):
     locator: Mapped[dict] = mapped_column(JSON, default=dict)
     is_valid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     validation_error: Mapped[str | None] = mapped_column(String(120))
+    source_scope: Mapped[str] = mapped_column(String(20), nullable=False, default="long_term", server_default="long_term")
+    document_title_snapshot: Mapped[str | None] = mapped_column(String(200))
+    original_filename_snapshot: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -223,3 +232,50 @@ class DocumentJob(Base):
     last_dispatch_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ModelConnection(Base):
+    __tablename__ = "model_connections"
+    __table_args__ = (Index("ix_model_connections_user_updated", "user_id", "updated_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_nonce: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active", server_default="active")
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ChatModel(Base):
+    __tablename__ = "chat_models"
+    __table_args__ = (Index("ix_chat_models_connection_status", "connection_id", "status"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    connection_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("model_connections.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="unverified", server_default="unverified")
+    verification_error: Mapped[str | None] = mapped_column(Text)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class EmbeddingConfig(Base):
+    __tablename__ = "embedding_configs"
+    __table_args__ = (Index("ix_embedding_configs_user_id", "user_id", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    api_key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    api_key_nonce: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="unverified", server_default="unverified")
+    verification_error: Mapped[str | None] = mapped_column(Text)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

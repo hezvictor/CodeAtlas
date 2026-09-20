@@ -82,7 +82,7 @@ class BulkConversationRequest(BaseModel):
 
 class ConversationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; pinned: bool; created_at: datetime; updated_at: datetime
+    id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; pinned: bool; selected_chat_model_id: uuid.UUID | None = None; created_at: datetime; updated_at: datetime
 
 
 class DashboardResponse(BaseModel):
@@ -93,7 +93,7 @@ class DashboardResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None; retrieved_chunk_ids: list[uuid.UUID]
+    id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None; chat_model_id: uuid.UUID | None = None; model_name_snapshot: str | None = None; retrieved_chunk_ids: list[uuid.UUID]
     duration_ms: int | None; first_token_latency_ms: int | None; problem_id: uuid.UUID | None
     mode: str; solution_language: str | None; created_at: datetime
 class MessagePage(BaseModel):
@@ -104,9 +104,10 @@ class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     mode: str = Field(default="normal", pattern="^(normal|acm_analysis|acm_solution)$")
     solution_language: str | None = Field(default=None, pattern="^(cpp|java|python)$")
+    chat_model_id: uuid.UUID | None = None
     attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
     knowledge_group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
-    knowledge_scope: Literal["none", "all", "groups"] = "none"
+    knowledge_scope: Literal["none", "all", "groups"] = "all"
     reuse_last_user: bool = False
     problem_id: uuid.UUID | None = None
 
@@ -209,7 +210,8 @@ class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
     user_id: uuid.UUID
-    group_id: uuid.UUID
+    group_id: uuid.UUID | None
+    scope: str = "long_term"
     title: str
     created_at: datetime
     updated_at: datetime
@@ -228,8 +230,9 @@ class CitationSourceResponse(BaseModel):
     document_id: uuid.UUID
     document_title: str
     original_filename: str
-    group_id: uuid.UUID
-    group_name: str
+    group_id: uuid.UUID | None
+    group_name: str | None
+    source_scope: str
     quote: str
     score: float
     rank: int
@@ -248,4 +251,97 @@ class AttachmentResponse(BaseModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
     document_version_id: uuid.UUID
+    document_id: uuid.UUID | None = None
+    title: str | None = None
+    original_filename: str | None = None
+    extension: str | None = None
+    status: str | None = None
+    scope: str | None = None
     created_at: datetime
+
+
+class ModelConnectionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: str = Field(min_length=1, max_length=500)
+
+    @field_validator("name", "base_url", "api_key")
+    @classmethod
+    def normalize_connection_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
+
+
+class ModelConnectionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    base_url: str | None = Field(default=None, min_length=1, max_length=500)
+    api_key: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @field_validator("name", "base_url", "api_key")
+    @classmethod
+    def normalize_optional_connection_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("value must not be blank")
+        return value
+
+
+class ChatModelCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_model_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("model name must not be blank")
+        return value
+
+
+class ModelConnectionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    name: str
+    base_url: str
+    status: str
+    last_error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatModelResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    connection_id: uuid.UUID
+    connection_name: str | None = None
+    name: str
+    source: str
+    status: str
+    verification_error: str | None
+    last_tested_at: datetime | None
+    is_default: bool = False
+
+
+class EmbeddingConfigUpdate(BaseModel):
+    api_key: str = Field(min_length=1, max_length=500)
+
+    @field_validator("api_key")
+    @classmethod
+    def normalize_embedding_key(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("api_key must not be blank")
+        return value
+
+
+class EmbeddingConfigResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    model_name: str
+    status: str
+    verification_error: str | None
+    last_tested_at: datetime | None
+    configured: bool

@@ -8,10 +8,11 @@ import boto3
 from ..config import get_settings
 
 
-def object_key_for(user_id: str, group_id: str, document_id: str, version_no: int, filename: str) -> str:
+def object_key_for(user_id: str, group_id: str | None, document_id: str, version_no: int, filename: str) -> str:
     safe_name = PurePath(filename).name
     safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)[:180] or "document"
-    return f"users/{user_id}/groups/{group_id}/documents/{document_id}/versions/{version_no}/{safe_name}"
+    scope_key = group_id or "long-term"
+    return f"users/{user_id}/scopes/{scope_key}/documents/{document_id}/versions/{version_no}/{safe_name}"
 
 
 class S3Storage:

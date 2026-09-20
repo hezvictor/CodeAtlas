@@ -76,7 +76,7 @@ async def _lock_document_for_version(document: Document, session: AsyncSession) 
 
 def document_response(document: Document, version: DocumentVersion | None) -> DocumentResponse:
     return DocumentResponse(
-        id=document.id, user_id=document.user_id, group_id=document.group_id, title=document.title,
+        id=document.id, user_id=document.user_id, group_id=document.group_id, scope=document.scope, title=document.title,
         created_at=document.created_at, updated_at=document.updated_at,
         latest_version=DocumentVersionResponse.model_validate(version) if version else None,
     )
@@ -119,16 +119,18 @@ async def list_documents(group_id: uuid.UUID | None = None, user_id=Depends(curr
 
 @router.post("", response_model=DocumentResponse, status_code=202)
 async def upload_document(
-    group_id: uuid.UUID = Form(...), title: str | None = Form(None), file: UploadFile = File(...),
+    group_id: uuid.UUID | None = Form(None), title: str | None = Form(None), file: UploadFile = File(...),
     user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session),
 ):
-    group = await session.scalar(select(KnowledgeGroup).where(KnowledgeGroup.id == group_id, KnowledgeGroup.user_id == user_id))
-    if not group:
-        raise HTTPException(404, "Knowledge group not found")
+    group = None
+    if group_id:
+        group = await session.scalar(select(KnowledgeGroup).where(KnowledgeGroup.id == group_id, KnowledgeGroup.user_id == user_id))
+        if not group:
+            raise HTTPException(404, "Knowledge group not found")
     filename = PurePath(file.filename or "document").name
     data = await file.read(get_settings().max_upload_size_bytes + 1)
     extension, mime_type = _validate_upload(filename, file.content_type, data)
-    document = Document(user_id=user_id, group_id=group_id, title=(title or PurePath(filename).stem).strip()[:200] or "Untitled document")
+    document = Document(user_id=user_id, group_id=group_id, scope="long_term", title=(title or PurePath(filename).stem).strip()[:200] or "Untitled document")
     session.add(document)
     await session.flush()
     max_version = await session.scalar(select(func.max(DocumentVersion.version_no)).where(DocumentVersion.document_id == document.id)) or 0
