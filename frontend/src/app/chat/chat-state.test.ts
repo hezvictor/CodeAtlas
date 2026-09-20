@@ -4,6 +4,7 @@ import {
   buildKnowledgePayload,
   createDraftConversation,
   deriveConversationTitle,
+  sortMessages,
   sortConversations,
 } from "../../lib/chat-state";
 
@@ -30,4 +31,15 @@ test("pinned conversations sort before recent conversations", () => {
     { id: "new", title: "new", updated_at: "2024-01-04", pinned: false },
   ]);
   assert.deepEqual(sorted.map((item) => item.id), ["pinned", "new", "old"]);
+});
+
+
+test("messages sort chronologically and put the user first on timestamp ties", () => {
+  const sorted = sortMessages([
+    { id: "assistant", role: "assistant", content: "answer", created_at: "2024-01-01T00:00:00.000Z" },
+    { id: "user", role: "user", content: "question", created_at: "2024-01-01T00:00:00.000Z" },
+    { id: "older", role: "user", content: "older", created_at: "2023-12-31T23:59:59.000Z" },
+  ]);
+
+  assert.deepEqual(sorted.map((item) => item.id), ["older", "user", "assistant"]);
 });

@@ -30,6 +30,19 @@ export function buildKnowledgePayload(scope: KnowledgeScope, groupId: string) {
   };
 }
 
+export type MessageLike = { role: "user" | "assistant"; created_at?: string; };
+
+export function sortMessages<T extends MessageLike>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aTime = a.created_at ? Date.parse(a.created_at) : Number.NaN;
+    const bTime = b.created_at ? Date.parse(b.created_at) : Number.NaN;
+    if (Number.isNaN(aTime) || Number.isNaN(bTime)) return 0;
+    if (aTime !== bTime) return aTime - bTime;
+    if (a.role !== b.role) return a.role === "user" ? -1 : 1;
+    return 0;
+  });
+}
+
 export function sortConversations<T extends ConversationLike>(items: T[]): T[] {
   return [...items].sort((a, b) => {
     if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
