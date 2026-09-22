@@ -1,3 +1,4 @@
+import uuid
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -5,11 +6,11 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Problem
-from ..schemas import ProblemPage
+from ..schemas import ProblemCreate, ProblemPage, ProblemUpdate
 
 
 def visible_problem_filter(user_id: UUID):
-    return or_(Problem.owner_user_id.is_(None), Problem.owner_user_id == user_id)
+    return Problem.owner_user_id == user_id
 
 
 async def get_owned_problem(session: AsyncSession, problem_id: UUID, user_id: UUID) -> Problem:
@@ -58,3 +59,60 @@ async def search_problems(
         )
     ).all()
     return ProblemPage(items=list(rows), page=page, page_size=page_size, total=total)
+
+
+async def clone_system_problems(session: AsyncSession, user_id: UUID) -> list[Problem]:
+    templates = (
+        await session.scalars(
+            select(Problem)
+            .where(Problem.owner_user_id.is_(None), Problem.source_type == "system")
+            .order_by(Problem.id.asc())
+        )
+    ).all()
+    rows = []
+    for template in templates:
+        row = Problem(
+            id=uuid.uuid4(),
+            owner_user_id=user_id,
+            source_type="default",
+            slug=f"default-{template.slug}-{user_id.hex}",
+            title=template.title,
+            difficulty=template.difficulty,
+            tags=list(template.tags or []),
+            statement=template.statement,
+            input_description=template.input_description,
+            output_description=template.output_description,
+            examples=list(template.examples or []),
+            constraints=template.constraints,
+            supported_languages=list(template.supported_languages or []),
+        )
+        session.add(row)
+        rows.append(row)
+    return rows
+
+
+async def create_problem(session: AsyncSession, user_id: UUID, payload: ProblemCreate) -> Problem:
+    problem_id = uuid.uuid4()
+    problem = Problem(
+        id=problem_id,
+        owner_user_id=user_id,
+        source_type="user",
+        slug=f"custom-{problem_id.hex}",
+        **payload.model_dump(),
+    )
+    session.add(problem)
+    return problem
+
+
+async def update_problem(
+    session: AsyncSession, problem_id: UUID, user_id: UUID, payload: ProblemUpdate
+) -> Problem:
+    problem = await get_owned_problem(session, problem_id, user_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(problem, field, value)
+    return problem
+
+
+async def delete_problem(session: AsyncSession, problem_id: UUID, user_id: UUID) -> None:
+    problem = await get_owned_problem(session, problem_id, user_id)
+    await session.delete(problem)

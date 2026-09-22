@@ -129,9 +129,106 @@ class ChatRequest(BaseModel):
         return self
 
 
+def _clean_text(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("value must not be blank")
+    return value
+
+
+def _clean_unique_strings(values: list[str]) -> list[str]:
+    result = []
+    for value in values:
+        value = value.strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+class ProblemFields(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    difficulty: str = Field(min_length=1, max_length=30)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    statement: str = Field(min_length=1, max_length=50000)
+    input_description: str = Field(min_length=1, max_length=20000)
+    output_description: str = Field(min_length=1, max_length=20000)
+    examples: list[dict] = Field(default_factory=list, max_length=20)
+    constraints: str = Field(min_length=1, max_length=20000)
+    supported_languages: list[str] = Field(default_factory=lambda: ["cpp", "java", "python"], max_length=10)
+
+    @field_validator(
+        "title",
+        "difficulty",
+        "statement",
+        "input_description",
+        "output_description",
+        "constraints",
+    )
+    @classmethod
+    def normalize_problem_text(cls, value: str) -> str:
+        return _clean_text(value)
+
+    @field_validator("tags", "supported_languages")
+    @classmethod
+    def normalize_problem_lists(cls, value: list[str]) -> list[str]:
+        result = _clean_unique_strings(value)
+        if not result and cls.model_fields.get("supported_languages"):
+            return result
+        return result
+
+    @model_validator(mode="after")
+    def validate_languages(self):
+        if not self.supported_languages:
+            raise ValueError("at least one supported language is required")
+        return self
+
+
+class ProblemCreate(ProblemFields):
+    pass
+
+
+class ProblemUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    difficulty: str | None = Field(default=None, min_length=1, max_length=30)
+    tags: list[str] | None = Field(default=None, max_length=20)
+    statement: str | None = Field(default=None, min_length=1, max_length=50000)
+    input_description: str | None = Field(default=None, min_length=1, max_length=20000)
+    output_description: str | None = Field(default=None, min_length=1, max_length=20000)
+    examples: list[dict] | None = Field(default=None, max_length=20)
+    constraints: str | None = Field(default=None, min_length=1, max_length=20000)
+    supported_languages: list[str] | None = Field(default=None, max_length=10)
+
+    @field_validator(
+        "title",
+        "difficulty",
+        "statement",
+        "input_description",
+        "output_description",
+        "constraints",
+    )
+    @classmethod
+    def normalize_optional_problem_text(cls, value: str | None) -> str | None:
+        return _clean_text(value) if value is not None else value
+
+    @field_validator("tags", "supported_languages")
+    @classmethod
+    def normalize_optional_problem_lists(cls, value: list[str] | None) -> list[str] | None:
+        return _clean_unique_strings(value) if value is not None else value
+
+    @model_validator(mode="after")
+    def validate_update(self):
+        if not self.model_fields_set:
+            raise ValueError("at least one field is required")
+        if self.supported_languages is not None and not self.supported_languages:
+            raise ValueError("at least one supported language is required")
+        return self
+
+
 class ProblemSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    owner_user_id: uuid.UUID
+    source_type: str
     slug: str
     title: str
     difficulty: str
@@ -140,8 +237,6 @@ class ProblemSummary(BaseModel):
 
 
 class ProblemResponse(ProblemSummary):
-    owner_user_id: uuid.UUID | None
-    source_type: str
     statement: str
     input_description: str
     output_description: str

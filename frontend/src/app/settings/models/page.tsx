@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Navbar from "../../../components/Navbar";
 import { API, apiFetch, getToken } from "../../../lib/auth";
+import { filterModels } from "./model-list";
 
 type Connection = { id: string; name: string; base_url: string; status: string; last_error?: string | null };
 type Model = { id: string; connection_id: string; name: string; source: string; status: string; verification_error?: string | null; is_default?: boolean };
@@ -24,6 +25,8 @@ export default function ModelSettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [modelNames, setModelNames] = useState<Record<string, string>>({});
+  const [modelListOpen, setModelListOpen] = useState<Record<string, boolean>>({});
+  const [modelSearches, setModelSearches] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const headers = () => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" });
@@ -77,7 +80,10 @@ export default function ModelSettingsPage() {
   async function discover(connectionId: string) {
     try {
       const data = await responseJson<{ error?: string | null }>(await apiFetch(`${API}/model-connections/${connectionId}/discover-models`, { method: "POST", headers: headers() }));
-      setMessage(data.error || "模型列表已更新"); await load();
+      setMessage(data.error || "模型列表已更新");
+      setModelListOpen(current => ({ ...current, [connectionId]: false }));
+      setModelSearches(current => ({ ...current, [connectionId]: "" }));
+      await load();
     } catch (caught) { setError(caught instanceof Error ? caught.message : "模型发现失败"); }
   }
 
@@ -119,5 +125,96 @@ export default function ModelSettingsPage() {
   }
 
   if (!token) return <><Navbar /><main className="workspace"><h1 className="page-title">请先登录</h1></main></>;
-  return <><Navbar /><main className="workspace model-settings-page"><div className="eyebrow">MODEL SETTINGS</div><h1 className="page-title">模型配置</h1><p className="sub">聊天页面只显示验证通过的模型。修改连接地址或 Key 后，需要重新验证模型。</p><section className="panel profile-form"><h3>{editingId ? "编辑模型连接" : "添加模型连接"}</h3><form onSubmit={saveConnection}><label>连接名称</label><input value={name} onChange={event => setName(event.target.value)} placeholder="例如 OpenRouter" required /><label>Base URL</label><input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" required /><label>API Key</label><input value={apiKey} onChange={event => setApiKey(event.target.value)} type="password" autoComplete="new-password" placeholder={editingId ? "留空则保持原 Key" : "API Key"} required={!editingId} /><button className="pill fill">{editingId ? "保存修改" : "保存连接"}</button>{editingId && <button className="pill" type="button" onClick={resetConnectionForm}>取消编辑</button>}</form></section>{connections.map(connection => <section className="panel model-connection-card" key={connection.id}><div className="model-connection-head"><div><h3>{connection.name}</h3><small>{connection.base_url} · key 已加密保存</small></div><div><button className="icon-button" type="button" onClick={() => editConnection(connection)}>编辑</button><button className="icon-button" type="button" onClick={() => deleteConnection(connection)}>删除</button><button className="pill" type="button" onClick={() => discover(connection.id)}>发现模型</button></div></div><div className="model-list">{models.filter(model => model.connection_id === connection.id).map(model => <div className="model-row" key={model.id}><span>{model.name}{model.is_default ? "（默认）" : ""}</span><span className={`model-status ${model.status}`}>{model.status === "verified" ? "已验证" : model.status === "invalid" ? "不可用" : "待验证"}</span><button className="icon-button" type="button" onClick={() => testModel(connection.id, model.id)}>测试</button>{model.status === "verified" && !model.is_default && <button className="icon-button" type="button" onClick={() => setDefaultModel(connection.id, model.id)}>设为默认</button>}</div>)}</div><div className="model-add-row"><input value={modelNames[connection.id] || ""} onChange={event => setModelNames(current => ({ ...current, [connection.id]: event.target.value }))} placeholder="手动添加模型名称" /><button className="pill" type="button" onClick={() => addModel(connection.id)}>添加</button></div></section>)}<section className="panel profile-form"><h3>知识库 Embedding</h3><p className="muted">模型固定为 {embedding?.model_name || "text-embedding-v3"}，仅支持填写百炼 API Key。只有验证成功后，长期资料和会话文件才会参与检索。</p><form onSubmit={saveEmbedding}><input name="api_key" type="password" autoComplete="new-password" placeholder="百炼 API Key" required /><button className="pill fill">保存 Embedding Key</button></form><button className="pill" type="button" onClick={testEmbedding}>测试 Embedding 连接</button><small className="muted">状态：{embedding?.status || "未配置"}</small></section>{(message || error) && <div className={`toast ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>{error || message}</div>}</main></>;
+  return <>
+    <Navbar />
+    <main className="workspace model-settings-page">
+      <div className="eyebrow">MODEL SETTINGS</div>
+      <h1 className="page-title">模型配置</h1>
+      <p className="sub">聊天页面只显示验证通过的模型。修改连接地址或 Key 后，需要重新验证模型。</p>
+      <section className="panel profile-form">
+        <h3>{editingId ? "编辑模型连接" : "添加模型连接"}</h3>
+        <form className="model-connection-form" onSubmit={saveConnection}>
+          <label className="model-connection-field">
+            <span>连接名称</span>
+            <input value={name} onChange={event => setName(event.target.value)} placeholder="例如 OpenRouter" required />
+          </label>
+          <label className="model-connection-field">
+            <span>Base URL</span>
+            <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" required />
+          </label>
+          <label className="model-connection-field">
+            <span>API Key</span>
+            <input value={apiKey} onChange={event => setApiKey(event.target.value)} type="password" autoComplete="new-password" placeholder={editingId ? "留空则保持原 Key" : "API Key"} required={!editingId} />
+          </label>
+          <button className="pill fill">{editingId ? "保存修改" : "保存连接"}</button>
+          {editingId ? <button className="pill" type="button" onClick={resetConnectionForm}>取消编辑</button> : null}
+        </form>
+      </section>
+      {connections.map(connection => {
+        const connectionModels = models.filter(model => model.connection_id === connection.id);
+        const isModelListOpen = modelListOpen[connection.id] || false;
+        const search = modelSearches[connection.id] || "";
+        const visibleModels = filterModels(connectionModels, search);
+        const modelSummary = connectionModels.slice(0, 2).map(model => model.name).join(" · ");
+        const listId = `model-list-${connection.id}`;
+
+        return <section className="panel model-connection-card" key={connection.id}>
+          <div className="model-connection-head">
+            <div><h3>{connection.name}</h3><small>{connection.base_url} · key 已加密保存</small></div>
+            <div>
+              <button className="icon-button" type="button" onClick={() => editConnection(connection)}>编辑</button>
+              <button className="icon-button" type="button" onClick={() => deleteConnection(connection)}>删除</button>
+              <button className="pill" type="button" onClick={() => discover(connection.id)}>发现模型</button>
+            </div>
+          </div>
+          <div className="model-list">
+            <button
+              aria-controls={listId}
+              aria-expanded={isModelListOpen}
+              className="model-list-toggle"
+              type="button"
+              onClick={() => setModelListOpen(current => ({ ...current, [connection.id]: !isModelListOpen }))}
+            >
+              <span className="model-list-summary">
+                <span>已配置 <b>{connectionModels.length}</b> 个模型</span>
+                {connectionModels.length ? <span className="model-list-names">{modelSummary}{connectionModels.length > 2 ? " 等" : ""}</span> : null}
+              </span>
+              <span className="model-list-toggle-action">{isModelListOpen ? "收起详情" : "查看模型详情"}</span>
+            </button>
+            {isModelListOpen ? <div className="model-list-content" id={listId}>
+              <label className="model-list-search">
+                <span>搜索模型</span>
+                <input
+                  value={search}
+                  onChange={event => setModelSearches(current => ({ ...current, [connection.id]: event.target.value }))}
+                  placeholder="按模型名称筛选"
+                  type="search"
+                />
+              </label>
+              {visibleModels.length ? <div className="model-list-scroll">
+                {visibleModels.map(model => <div className="model-row" key={model.id}>
+                  <span>{model.name}{model.is_default ? "（默认）" : ""}</span>
+                  <span className={`model-status ${model.status}`}>{model.status === "verified" ? "已验证" : model.status === "invalid" ? "不可用" : "待验证"}</span>
+                  <button className="icon-button" type="button" onClick={() => testModel(connection.id, model.id)}>测试</button>
+                  {model.status === "verified" && !model.is_default ? <button className="icon-button" type="button" onClick={() => setDefaultModel(connection.id, model.id)}>设为默认</button> : null}
+                </div>)}
+              </div> : <p className="model-list-empty">{connectionModels.length ? "没有匹配的模型" : "尚未添加模型，可点击发现模型或手动添加。"}</p>}
+            </div> : null}
+          </div>
+          <div className="model-add-row">
+            <input value={modelNames[connection.id] || ""} onChange={event => setModelNames(current => ({ ...current, [connection.id]: event.target.value }))} placeholder="手动添加模型名称" />
+            <button className="pill" type="button" onClick={() => addModel(connection.id)}>添加</button>
+          </div>
+        </section>;
+      })}
+      <section className="panel profile-form">
+        <h3>知识库 Embedding</h3>
+        <p className="muted">模型固定为 {embedding?.model_name || "text-embedding-v3"}，仅支持填写百炼 API Key。只有验证成功后，长期资料和会话文件才会参与检索。</p>
+        <form onSubmit={saveEmbedding}><input name="api_key" type="password" autoComplete="new-password" placeholder="百炼 API Key" required /><button className="pill fill">保存 Embedding Key</button></form>
+        <button className="pill" type="button" onClick={testEmbedding}>测试 Embedding 连接</button>
+        <small className="muted">状态：{embedding?.status || "未配置"}</small>
+      </section>
+      {message || error ? <div className={`toast ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>{error || message}</div> : null}
+    </main>
+  </>;
 }

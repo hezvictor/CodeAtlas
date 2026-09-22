@@ -26,6 +26,6 @@
 
 ## 尚未实现模型
 
-`problems` 将在 Phase 4 通过下一条迁移加入。系统题目使用空 `owner_user_id`，私人题目使用用户 ID；当前阶段只提供系统题目。`messages` 将增加可空的 `problem_id`、`mode` 和 `solution_language`。
+`problems` 已通过 Phase 4 迁移加入。系统题目使用空 `owner_user_id` 作为注册模板；注册时复制为当前用户拥有的 `source_type=default` 题目，用户新建题目使用 `source_type=user`。题目 ID 使用 UUID，用户只能管理自己的题目。`messages.problem_id` 使用 `ON DELETE SET NULL`，删除题目不会破坏历史消息。
 
 本阶段不引入 LangGraph checkpoints；checkpoint 属于后续单独阶段。

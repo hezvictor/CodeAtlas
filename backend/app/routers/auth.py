@@ -9,6 +9,7 @@ from ..db import get_session
 from ..dependencies import current_user_id
 from ..models import RefreshToken, User
 from ..schemas import LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, TokenResponse, UserResponse
+from ..services.problems import clone_system_problems
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -24,6 +25,7 @@ async def register(payload: RegisterRequest, session: AsyncSession = Depends(get
     raw, token_hash, expires = create_refresh_token()
     session.add(user)
     await session.flush()
+    await clone_system_problems(session, user.id)
     session.add(RefreshToken(user_id=user.id, token_hash=token_hash, expires_at=expires))
     try:
         await session.commit()

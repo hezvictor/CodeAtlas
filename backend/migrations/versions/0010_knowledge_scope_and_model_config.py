@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 
-revision = "0010_knowledge_scope_and_model_config"
+revision = "0010_knowledge_scope_model_cfg"
 down_revision = "0009_chat_session_management"
 branch_labels = None
 depends_on = None

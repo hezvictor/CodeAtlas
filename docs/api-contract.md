@@ -44,11 +44,14 @@ SSE 当前事件为 `run.started`、`retrieval.completed`、`retrieval.failed`�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/problems` | 按关键词、难度、标签分页查询当前用户可见题目 |
-| GET | `/problems/{id}` | 查询题目详情 |
+| GET | `/problems` | 按关键词、难度、标签分页查询当前用户自己的题目 |
+| GET | `/problems/{id}` | 查询当前用户自己的题目详情 |
+| POST | `/problems` | 创建当前用户题目 |
+| PATCH | `/problems/{id}` | 修改当前用户题目 |
+| DELETE | `/problems/{id}` | 删除当前用户题目 |
 | GET | `/dashboard` | 查询首页真实会话统计和最近会话 |
 
-题目查询返回系统题目和当前用户拥有的私人题目。ACM 分析模式必须提供 `problem_id`；ACM 解题模式必须同时提供 `problem_id` 和支持的编程语言。题目不存在或不属于当前用户时返回 404。
+系统题目是注册初始化模板，不直接出现在用户题库中。新账号注册事务会复制系统模板为 `source_type=default` 的用户题目；用户后续创建的题目使用 `source_type=user`。题目查询只返回当前用户自己的题目，创建、修改和删除也只能操作当前用户题目。ACM 分析模式必须提供 `problem_id`；ACM 解题模式必须同时提供 `problem_id` 和支持的编程语言。题目不存在或不属于当前用户时返回 404。
 
 ## 尚未实现接口
 
