@@ -5,6 +5,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 function CodeBlock({ className, children, node: _node, ...props }: HTMLAttributes<HTMLElement> & { node?: unknown }) {
+  void _node;
   const [copied, setCopied] = useState(false);
   const language = className?.match(/language-([\w+#-]+)/)?.[1] || "text";
   const code = String(children).replace(/\n$/, "");

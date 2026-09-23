@@ -2,31 +2,56 @@
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
+
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete as sql_delete, func, select, update as sql_update
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import func, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..acm_workflow import build_acm_prompt, sanitize_analysis_output
+from ..chat_rag import build_context_prompt
+from ..citations import citation_sources, persist_citations
 from ..config import get_settings
 from ..db import get_session, session_factory
 from ..dependencies import current_user_id
-from ..models import ChatModel, Citation, Conversation, EmbeddingConfig, Message, ModelConnection, User
-from ..chat_rag import build_context_prompt
-from ..citations import citation_sources, persist_citations
-from ..acm_workflow import build_acm_prompt, sanitize_analysis_output
-from ..code_validation import extract_solution_code, validate_solution_code
-from ..services.problem_context import format_problem_context, message_context_metadata, resolve_problem_context, validate_chat_context
-from ..services.retrieval_service import retrieve_chunks
-from ..services.context_budget import trim_history, trim_retrieved_chunks
-from ..services.run_state import RunLease, RunState
-from ..schemas import BulkConversationRequest, ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate, MessagePage, MessageResponse, RetryRequest
+from ..models import (
+    ChatModel,
+    Conversation,
+    EmbeddingConfig,
+    Message,
+    ModelConnection,
+    RerankerConfig,
+    User,
+)
+from ..providers.embedding import UserEmbeddingProvider, project_embedding_is_configured
 from ..providers.openai_compatible import OpenAICompatibleChatProvider
-from ..providers.embedding import UserEmbeddingProvider
+from ..schemas import (
+    BulkConversationRequest,
+    ChatRequest,
+    ConversationCreate,
+    ConversationResponse,
+    ConversationUpdate,
+    MessagePage,
+    RetryRequest,
+)
 from ..security.provider_credentials import decrypt_secret
+from ..services.context_budget import trim_history, trim_retrieved_chunks
+from ..services.problem_context import (
+    format_problem_context,
+    message_context_metadata,
+    resolve_problem_context,
+    validate_chat_context,
+)
+from ..services.query_rewrite import build_retrieval_queries
+from ..services.retrieval_service import retrieve_chunks
+from ..services.run_state import RunLease, RunState
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 logger = logging.getLogger(__name__)
@@ -47,6 +72,8 @@ class RunRecord:
     content: str = ""
     message_id: str | None = None
     events: list[tuple[str, dict]] = field(default_factory=list)
+    sequence: int = 0
+    finished_at: datetime | None = None
     subscribers: set[asyncio.Queue] = field(default_factory=set)
     task: asyncio.Task | None = None
 
@@ -75,13 +102,13 @@ class RunRegistry:
             handle.last_activity = datetime.now(UTC)
             return handle
 
-    async def start(self, conversation_id: str, runner, message_id: str | None = None) -> str:
+    async def start(self, conversation_id: str, runner, message_id: str | None = None, reserved_handle: RunHandle | None = None) -> str:
         """Start a process-owned generation task and return its reconnectable run id.
 
         ``runner`` may be an async iterable factory accepting the RunHandle, or an
         async callable. Events yielded as strings are exposed as ``message.delta``.
         """
-        handle = await self.acquire(conversation_id)
+        handle = reserved_handle or await self.acquire(conversation_id)
         run_id = str(uuid4())
         handle.run_id = run_id
         record = RunRecord(run_id, conversation_id, handle, message_id=message_id)
@@ -104,13 +131,15 @@ class RunRegistry:
                             await self.publish(record, "message.delta", {"content": str(delta)})
                 elif asyncio.iscoroutine(result):
                     await result
-                record.status = "cancelled" if handle.stop_event.is_set() else "completed"
-                await self.publish(record, "run.completed" if record.status == "completed" else "run.interrupted", {})
+                if record.status == "generating":
+                    record.status = "cancelled" if handle.stop_event.is_set() else "completed"
+                    await self.publish(record, "run.completed" if record.status == "completed" else "run.interrupted", {})
             except Exception:
                 logger.exception("background run failed", extra={"conversation_id": conversation_id})
                 record.status = "failed"
                 await self.publish(record, "run.failed", {"code": "CHAT_PROVIDER_ERROR"})
             finally:
+                record.finished_at = datetime.now(UTC)
                 await self.release(conversation_id, handle)
 
         record.task = asyncio.create_task(execute())
@@ -121,27 +150,40 @@ class RunRegistry:
         return {"run_id": record.run_id, "conversation_id": record.conversation_id, "message_id": record.message_id, "status": record.status, "content": record.content}
 
     async def publish(self, record: RunRecord, name: str, data: dict) -> None:
+        record.sequence += 1
         record.events.append((name, data))
+        if len(record.events) > 128:
+            del record.events[:-128]
         for queue in list(record.subscribers):
-            await queue.put((name, data))
+            if queue.full():
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait((record.sequence, "run.snapshot", self.snapshot(record)))
+            else:
+                queue.put_nowait((record.sequence, name, data))
 
     def get_record(self, conversation_id: str, run_id: str | None = None) -> RunRecord | None:
         records = [r for r in self._records.values() if r.conversation_id == conversation_id and (run_id is None or r.run_id == run_id)]
         return records[-1] if records else None
 
     async def subscribe(self, record: RunRecord) -> AsyncGenerator[str, None]:
-        queue: asyncio.Queue[tuple[str, dict]] = asyncio.Queue(maxsize=128)
+        queue: asyncio.Queue[tuple[int, str, dict]] = asyncio.Queue(maxsize=128)
         record.subscribers.add(queue)
         try:
-            yield event("run.snapshot", self.snapshot(record))
-            if record.status != "generating":
-                for name, payload in record.events[1:]:
-                    yield event(name, payload)
+            snapshot = self.snapshot(record)
+            snapshot_sequence = record.sequence
+            yield event("run.snapshot", snapshot)
+            if snapshot["status"] != "generating":
+                for name, payload in record.events:
+                    if name not in {"run.snapshot", "message.delta"}:
+                        yield event(name, payload)
                 return
             while True:
-                name, payload = await queue.get()
+                sequence, name, payload = await queue.get()
+                if sequence <= snapshot_sequence:
+                    continue
                 yield event(name, payload)
-                if name in {"run.completed", "run.interrupted", "run.failed"}:
+                if name in {"run.completed", "run.interrupted", "run.failed"} or (name == "run.snapshot" and payload.get("status") != "generating"):
                     return
         finally:
             record.subscribers.discard(queue)
@@ -167,9 +209,12 @@ class RunRegistry:
     async def cleanup(self) -> None:
         cutoff = datetime.now(UTC).timestamp() - self.ttl_seconds
         async with self._guard:
-            for cid, (lock, handle) in list(self._runs.items()):
+            for _cid, (lock, handle) in list(self._runs.items()):
                 if lock.locked() and handle.last_activity.timestamp() < cutoff:
                     handle.stop_event.set()
+            for run_id, record in list(self._records.items()):
+                if record.finished_at and record.finished_at.timestamp() < cutoff:
+                    self._records.pop(run_id, None)
 
 
 runs = RunRegistry()
@@ -211,6 +256,29 @@ async def resolve_chat_model(session: AsyncSession, conversation: Conversation, 
 def embedding_config_is_verified(config: EmbeddingConfig | None) -> bool:
     return config is not None and config.status == "verified"
 
+
+def embedding_is_available(config: EmbeddingConfig | None) -> bool:
+    return embedding_config_is_verified(config) or (config is None and project_embedding_is_configured(get_settings()))
+
+
+async def _resolve_reranker(session: AsyncSession, user_id: UUID, config: RerankerConfig | None):
+    settings = get_settings()
+    if config and getattr(config, "status", None) == "verified":
+        key = decrypt_secret(config.api_key_ciphertext, config.api_key_nonce)
+        base_url, model = config.base_url, config.model_name
+    elif settings.reranker_base_url and settings.reranker_api_key and settings.reranker_model:
+        key, base_url, model = settings.reranker_api_key, settings.reranker_base_url, settings.reranker_model
+    else:
+        return None
+    from ..providers.reranker import RerankerProvider
+    provider = RerankerProvider(base_url, key, model)
+
+    async def rerank(query, chunks):
+        rows = await provider.rerank(query, [item.content for item in chunks])
+        return [chunks[index] for index, _score in rows if 0 <= index < len(chunks)]
+
+    return rerank
+
 def event(name: str, data: dict) -> str: return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 @router.get("", response_model=list[ConversationResponse])
@@ -219,7 +287,7 @@ async def list_conversations(uid=Depends(current_user_id), session=Depends(get_s
 
 @router.post("", response_model=ConversationResponse, status_code=201)
 async def create_conversation(payload: ConversationCreate, uid=Depends(current_user_id), session=Depends(get_session)):
-    item = Conversation(user_id=uid, title=payload.title.strip(), mode=payload.mode); session.add(item); await session.commit(); await session.refresh(item); return item
+    item = Conversation(user_id=uid, title=payload.title.strip(), mode=payload.mode, knowledge_scope=payload.knowledge_scope); session.add(item); await session.commit(); await session.refresh(item); return item
 
 @router.get("/{cid}", response_model=ConversationResponse)
 async def get_conversation(cid, uid=Depends(current_user_id), session=Depends(get_session)): return await conversation(cid, uid, session)
@@ -270,6 +338,8 @@ async def messages(cid, limit: int = 30, before: datetime | None = None, uid=Dep
 @router.post("/{cid}/messages/{mid}/retry")
 async def retry_message(cid: UUID, mid: UUID, payload: RetryRequest, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     await conversation(cid, uid, session)
+    if runs.is_running(str(cid)):
+        raise HTTPException(409, "A generation is already running for this conversation")
     target = await session.scalar(select(Message).where(Message.id == mid, Message.conversation_id == cid))
     if not target: raise HTTPException(404, "Message not found")
     content = payload.content.strip() if payload.content else target.content
@@ -278,6 +348,9 @@ async def retry_message(cid: UUID, mid: UUID, payload: RetryRequest, uid=Depends
         await session.execute(Message.__table__.delete().where(Message.conversation_id == cid, Message.created_at > target.created_at))
         context_message = target
     elif target.role == "assistant":
+        newer = await session.scalar(select(Message.id).where(Message.conversation_id == cid, Message.created_at > target.created_at).limit(1))
+        if newer:
+            raise HTTPException(409, "Only the latest assistant message can be retried")
         previous = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.created_at < target.created_at).order_by(Message.created_at.desc()))
         if not previous or previous.role != "user": raise HTTPException(400, "Assistant message has no user prompt")
         content = previous.content
@@ -329,36 +402,38 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
     problem = await resolve_problem_context(session, payload.problem_id, uid)
     started = time.monotonic()
     embedding_config = await session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == uid))
-    retrieval_requested = embedding_config_is_verified(embedding_config) and (
-        payload.knowledge_scope != "none" or bool(payload.attachment_ids)
-    )
+    reranker_config = await session.scalar(select(RerankerConfig).where(RerankerConfig.user_id == uid))
+    # `none` is an explicit no-retrieval contract, including when attachments
+    # are present. `all` always enters the retrieval stage so missing provider
+    # configuration is reported as a retrieval failure instead of a silent
+    # model-only answer.
+    retrieval_requested = payload.knowledge_scope == "all"
     retrieved = []
     retrieval_error: Exception | None = None
+    retry_user = None
     if payload.reuse_last_user:
-        user = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.role == "user").order_by(Message.created_at.desc()).limit(1))
-        if not user:
+        retry_user = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.role == "user").order_by(Message.created_at.desc()).limit(1))
+        if not retry_user:
             raise HTTPException(400, "No user message available to retry")
-        user.content = payload.content
-        user.problem_id = problem.id if problem else None
-        user.mode = payload.mode
-        user.solution_language = payload.solution_language
-    else:
-        user = Message(conversation_id=cid, role="user", content=payload.content, status="completed", problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language)
-        session.add(user)
-    await session.flush()
-    rows = (await session.scalars(select(Message).where(Message.conversation_id == cid, Message.id != user.id).order_by(Message.created_at))).all()
+    history_query = select(Message).where(Message.conversation_id == cid)
+    if retry_user:
+        history_query = history_query.where(Message.id != retry_user.id)
+    rows = (await session.scalars(history_query.order_by(Message.created_at))).all()
     history = trim_history([{"role": item.role, "content": item.content} for item in rows], getattr(get_settings(), "chat_history_max_chars", 60_000), getattr(get_settings(), "chat_history_max_messages", 30))
     try:
-        if retrieval_requested:
+        if retrieval_requested and not embedding_is_available(embedding_config):
+            retrieval_error = RuntimeError("embedding provider is not configured or verified")
+        elif retrieval_requested:
             retrieved = await retrieve_chunks(
                 session,
                 uid,
                 cid,
                 payload.content,
-                payload.knowledge_group_ids,
                 payload.attachment_ids,
                 knowledge_scope=payload.knowledge_scope,
                 embedding_provider=UserEmbeddingProvider(session, uid),
+                queries=build_retrieval_queries(payload.content, history),
+                reranker=(await _resolve_reranker(session, uid, reranker_config)),
             )
             retrieved = trim_retrieved_chunks(
                 retrieved, getattr(get_settings(), "rag_context_max_chars", 40_000), 10
@@ -366,13 +441,30 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
     except Exception as error:
         logger.exception("retrieval failed", extra={"conversation_id": str(cid), "user_id": str(uid)})
         retrieval_error = error
-    selected_model_name = selected_chat_model.name
-    if selected_chat_model.id != getattr(conversation_item, "selected_chat_model_id", None):
+    handle = await runs.acquire(str(cid))
+    try:
+        if retry_user:
+            user = retry_user
+            user.content = payload.content
+            user.problem_id = problem.id if problem else None
+            user.mode = payload.mode
+            user.knowledge_scope = payload.knowledge_scope
+            user.solution_language = payload.solution_language
+        else:
+            user = Message(conversation_id=cid, role="user", content=payload.content, status="completed", problem_id=problem.id if problem else None, mode=payload.mode, knowledge_scope=payload.knowledge_scope, solution_language=payload.solution_language)
+            session.add(user)
+        selected_model_name = selected_chat_model.name
         conversation_item.selected_chat_model_id = selected_chat_model.id
-    assistant = Message(conversation_id=cid, role="assistant", content="", status="generating", model=selected_model_name, chat_model_id=selected_chat_model.id, model_name_snapshot=selected_model_name, problem_id=problem.id if problem else None, mode=payload.mode, solution_language=payload.solution_language, retrieved_chunk_ids=[str(item.chunk_id) for item in retrieved])
-    session.add(assistant)
-    await session.commit()
-    await session.refresh(assistant)
+        conversation_item.mode = payload.mode
+        conversation_item.knowledge_scope = payload.knowledge_scope
+        assistant = Message(conversation_id=cid, role="assistant", content="", status="generating", model=selected_model_name, chat_model_id=selected_chat_model.id, model_name_snapshot=selected_model_name, problem_id=problem.id if problem else None, mode=payload.mode, knowledge_scope=payload.knowledge_scope, solution_language=payload.solution_language, retrieved_chunk_ids=[str(item.chunk_id) for item in retrieved])
+        session.add(assistant)
+        await session.commit()
+        await session.refresh(assistant)
+    except BaseException:
+        await session.rollback()
+        await runs.release(str(cid), handle)
+        raise
     assistant_id = assistant.id
 
     async def persist(status: str, content: str, first_token_ms: int | None):
@@ -393,14 +485,20 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
         first_token_ms: int | None = None
         record.message_id = str(assistant_id)
         await runs.publish(record, "run.started", {"conversation_id": str(cid), "message_id": str(assistant_id)})
-        await runs.publish(record, "retrieval.completed", {"status": "failed" if retrieval_error else "ok", "count": len(retrieved), "items": [{"chunk_id": str(item.chunk_id), "score": item.score, "locator": item.locator or {}} for item in retrieved]})
+        retrieval_status = (
+            "failed" if retrieval_error else
+            "no_hit" if retrieval_requested and not retrieved else
+            "ok" if retrieval_requested else
+            "not_requested"
+        )
+        await runs.publish(record, "retrieval.completed", {"status": retrieval_status, "count": len(retrieved), "items": [{"chunk_id": str(item.chunk_id), "score": item.score, "locator": item.locator or {}} for item in retrieved]})
         if retrieval_error and retrieval_requested:
             await persist("failed", "", None)
             record.status = "failed"
             await runs.publish(record, "run.failed", {"code": "RETRIEVAL_FAILED", "message": "知识库检索失败，请稍后重试", "message_id": str(assistant_id)})
             return
         try:
-            knowledge_context = "\n\n".join(f"来源切片：{item.chunk_id}\n{item.content}" for item in retrieved)
+            knowledge_context = "\n\n".join(f"来源切片：{item.chunk_id}\n{item.prompt_content}" for item in retrieved)
             if payload.mode == "normal":
                 base_prompt = payload.content if not problem else f"{format_problem_context(problem)}\n\n用户问题：{payload.content}"
                 prompt = build_context_prompt(base_prompt, retrieved)
@@ -440,7 +538,12 @@ async def stream(cid: UUID, payload: ChatRequest, uid=Depends(current_user_id), 
             record.status = "failed"
             await runs.publish(record, "run.failed", {"code": "CHAT_PROVIDER_ERROR", "message": "生成回答失败，请稍后重试", "message_id": str(assistant_id)})
 
-    run_id = await runs.start(str(cid), generate, message_id=str(assistant_id))
+    try:
+        run_id = await runs.start(str(cid), generate, message_id=str(assistant_id), reserved_handle=handle)
+    except BaseException:
+        await runs.release(str(cid), handle)
+        await persist("failed", "", None)
+        raise
     record = runs.get_record(str(cid), run_id)
     return StreamingResponse(runs.subscribe(record), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 

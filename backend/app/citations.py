@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .models import Citation, Document, DocumentChunk, DocumentVersion, KnowledgeGroup, Message
 from .retrieval import RankedChunk
 
-
 _CITATION = re.compile(r"\[cite:([^\]]+)\]")
 
 

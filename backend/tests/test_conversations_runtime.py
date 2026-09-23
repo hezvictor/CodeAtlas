@@ -1,5 +1,5 @@
-﻿import uuid
-import asyncio
+﻿import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -12,6 +12,25 @@ from app.main import app
 from app.models import Conversation
 from app.routers import conversations as conversations_module
 from app.routers.conversations import RunRegistry
+
+
+@pytest.mark.asyncio
+async def test_slow_subscriber_finishes_after_terminal_queue_overflow():
+    registry = RunRegistry()
+    record = conversations_module.RunRecord("run-overflow", "conversation-overflow", conversations_module.RunHandle())
+    stream = registry.subscribe(record)
+    assert "run.snapshot" in await anext(stream)
+    for _ in range(128):
+        await registry.publish(record, "message.delta", {"content": "x"})
+    record.status = "completed"
+    await registry.publish(record, "run.completed", {})
+
+    async def consume_remaining():
+        return [item async for item in stream]
+
+    remaining = await asyncio.wait_for(consume_remaining(), timeout=0.5)
+    assert len(remaining) == 1
+    assert '"status": "completed"' in remaining[0]
 
 
 @pytest.mark.asyncio
@@ -76,6 +95,60 @@ async def test_registry_expires_stale_run():
     await registry.release("conversation-1", handle)
     assert not registry.is_running("conversation-1")
     assert registry.get_stop_event("conversation-1") is None
+
+
+@pytest.mark.asyncio
+async def test_registry_does_not_complete_a_run_that_reported_failure():
+    registry = RunRegistry()
+
+    async def runner(_handle, record):
+        record.status = "failed"
+        await registry.publish(record, "run.failed", {"code": "RETRIEVAL_FAILED"})
+        if False:
+            yield "unused"
+
+    run_id = await registry.start("conversation-failed", runner)
+    await asyncio.sleep(0.01)
+    record = registry.get_record("conversation-failed", run_id)
+
+    assert record is not None
+    assert record.status == "failed"
+    assert [name for name, _ in record.events if name == "run.completed"] == []
+
+
+@pytest.mark.asyncio
+async def test_registry_cleanup_removes_expired_finished_records():
+    registry = RunRegistry(ttl_seconds=1)
+
+    async def runner(_handle):
+        yield "done"
+
+    run_id = await registry.start("conversation-finished", runner)
+    await asyncio.sleep(0.01)
+    record = registry.get_record("conversation-finished", run_id)
+    assert record is not None
+    record.finished_at = datetime.now(UTC) - timedelta(seconds=2)
+
+    await registry.cleanup()
+
+    assert registry.get_record("conversation-finished", run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_finished_run_subscription_does_not_replay_deltas_after_snapshot():
+    registry = RunRegistry()
+
+    async def runner(_handle):
+        yield "hello"
+
+    run_id = await registry.start("conversation-replay", runner)
+    await asyncio.sleep(0.01)
+    record = registry.get_record("conversation-replay", run_id)
+    events = [item async for item in registry.subscribe(record)]
+
+    assert '"content": "hello"' in events[0]
+    assert not any("event: message.delta" in item for item in events)
+    assert any("event: run.completed" in item for item in events)
 
 
 class _Rows:
@@ -184,6 +257,39 @@ async def test_stream_rejects_requests_when_no_verified_model_exists(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_stream_rejects_busy_conversation_before_creating_messages(monkeypatch):
+    cid, uid = uuid.uuid4(), uuid.uuid4()
+    request_session = _FakeSession(Conversation(id=cid, user_id=uid, title="新对话", mode="normal"))
+
+    async def override_session():
+        yield request_session
+
+    async def verified_model(*_args, **_kwargs):
+        return SimpleNamespace(id=uuid.uuid4(), name="verified-model"), SimpleNamespace()
+
+    registry = RunRegistry()
+    handle = await registry.acquire(str(cid))
+    app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[current_user_id] = lambda: uid
+    monkeypatch.setattr(conversations_module, "runs", registry)
+    monkeypatch.setattr(conversations_module, "resolve_chat_model", verified_model)
+
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                f"/api/v1/conversations/{cid}/messages/stream",
+                json={"content": "another question"},
+            )
+
+        assert response.status_code == 409
+        assert request_session.added == []
+    finally:
+        await registry.release(str(cid), handle)
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_scoped_retrieval_failure_does_not_fall_back_to_chat(monkeypatch):
     cid, uid = uuid.uuid4(), uuid.uuid4()
     request_session = _FakeSession(Conversation(id=cid, user_id=uid, title="新对话", mode="normal"))
@@ -213,7 +319,7 @@ async def test_scoped_retrieval_failure_does_not_fall_back_to_chat(monkeypatch):
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             response = await client.post(
                 f"/api/v1/conversations/{cid}/messages/stream",
-                json={"content": "查询知识库", "knowledge_group_ids": [str(uuid.uuid4())]},
+                    json={"content": "查询知识库", "knowledge_scope": "all"},
             )
 
         assert response.status_code == 200

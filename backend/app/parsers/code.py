@@ -2,7 +2,6 @@ import re
 
 from .base import ParsedBlock, ParsedDocument
 
-
 _LANGUAGES = {".py": "python", ".java": "java", ".c": "c", ".cc": "cpp", ".cpp": "cpp", ".h": "c", ".hpp": "cpp"}
 
 

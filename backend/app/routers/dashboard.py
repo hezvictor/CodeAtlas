@@ -9,7 +9,6 @@ from ..dependencies import current_user_id
 from ..models import Conversation
 from ..schemas import DashboardResponse
 
-
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 

@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import hljs from "highlight.js/lib/common";
@@ -60,7 +60,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
   }
 
   return <div className="document-code-block">
-    <div className="document-code-toolbar"><span className="document-code-language">{language}</span><button type="button" onClick={copyCode}>{copied ? "已复制" : "复制代码"}</button></div>
+    <div className="document-code-toolbar"><span className="document-code-language">{language.toLowerCase() === "python" ? "Python" : language}</span><button type="button" onClick={copyCode}>{copied ? "已复制" : "复制代码"}</button></div>
     <pre><code>{lines.map((line, index) => <span className="document-code-line" key={`${index}-${line}`}><span className="document-code-line-number" aria-hidden="true">{index + 1}</span><span className="document-code-line-text" dangerouslySetInnerHTML={{ __html: hljs.highlight(line || " ", { language: highlightLanguage(language), ignoreIllegals: true }).value }} /></span>)}</code></pre>
   </div>;
 }
@@ -68,6 +68,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 const markdownComponents: Components = {
   pre: ({ children }) => <>{children}</>,
   code: ({ children, className, node: _node }) => {
+    void _node;
     const language = className?.match(/language-([\w+#-]+)/)?.[1];
     if (!language && !className) return <code className="document-inline-code">{children}</code>;
     return <CodeBlock language={language || "Code"} code={String(children).replace(/\n$/, "")} />;

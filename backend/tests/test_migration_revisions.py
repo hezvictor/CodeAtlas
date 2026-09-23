@@ -1,5 +1,5 @@
-from pathlib import Path
 import re
+from pathlib import Path
 
 
 def test_migration_revisions_fit_alembic_default_version_column():

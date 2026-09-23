@@ -4,11 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_analysis_requires_a_problem_id():
+def test_analysis_can_use_user_described_problem_without_problem_id():
     from app.services.problem_context import validate_chat_context
 
-    with pytest.raises(ValueError, match="problem"):
-        validate_chat_context("acm_analysis", None, None)
+    assert validate_chat_context("acm_analysis", None, None) == (None, None)
 
 
 def test_solution_requires_supported_language():
@@ -31,11 +30,13 @@ def test_message_context_metadata_preserves_retry_context():
     message = SimpleNamespace(
         problem_id=problem_id,
         mode="acm_solution",
+        knowledge_scope="all",
         solution_language="python",
     )
 
     assert message_context_metadata(message) == {
         "problem_id": problem_id,
         "mode": "acm_solution",
+        "knowledge_scope": "all",
         "solution_language": "python",
     }

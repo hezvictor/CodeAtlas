@@ -12,8 +12,8 @@ except ImportError:  # Worker commands still require arq; importing API settings
 
 from .config import get_settings
 from .queue import dispatch_pending_document_jobs, recover_stale_document_jobs
-from .tasks.document_tasks import cleanup_deleted_document_objects, process_document
 from .tasks.auth_tasks import cleanup_refresh_tokens
+from .tasks.document_tasks import cleanup_deleted_document_objects, process_document
 
 
 class WorkerSettings:

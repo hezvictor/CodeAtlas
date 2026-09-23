@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-import asyncio
 from typing import Protocol
 
 

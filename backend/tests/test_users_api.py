@@ -6,6 +6,7 @@ def test_user_schemas_support_profile_and_password_changes():
 
 def test_user_nickname_rejects_whitespace_only_values():
     from pydantic import ValidationError
+
     from app.schemas import RegisterRequest, UserUpdate
     for factory in (lambda: UserUpdate(nickname="   "), lambda: RegisterRequest(email="a@b.com", password="password123", nickname="  ")):
         try:

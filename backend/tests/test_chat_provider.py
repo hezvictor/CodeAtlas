@@ -2,7 +2,6 @@ import asyncio
 import json
 
 import httpx
-import pytest
 
 
 class _AsyncClient:
@@ -24,7 +23,6 @@ class _AsyncClient:
         return httpx.Response(200, request=httpx.Request("POST", url), json={"choices": [{"message": {"content": "ok"}}]})
 
     def stream(self, method, url, **kwargs):
-        request = httpx.Request(method, url)
         chunks = [
             f"data: {json.dumps({'choices': [{'delta': {'content': 'hello'}}]})}\n\n",
             f"data: {json.dumps({'choices': [{'delta': {'content': ' world'}}]})}\n\n",

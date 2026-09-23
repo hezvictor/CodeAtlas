@@ -9,7 +9,7 @@ from ..config import get_settings
 from ..db import session_factory
 from ..models import Document, DocumentChunk, DocumentJob, DocumentVersion, EmbeddingConfig
 from ..parsers import parse_document
-from ..providers.embedding import UserEmbeddingProvider
+from ..providers.embedding import UserEmbeddingProvider, project_embedding_is_configured
 from ..storage.s3 import S3Storage
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,9 @@ async def process_document(_ctx, job_id: str) -> dict:
         embedding_config = await session.scalar(
             select(EmbeddingConfig).where(EmbeddingConfig.user_id == document.user_id)
         )
-        if not embedding_config or embedding_config.status != "verified":
+        if (embedding_config and embedding_config.status != "verified") or (
+            not embedding_config and not project_embedding_is_configured()
+        ):
             version.status = "waiting_embedding"
             job.status, job.stage = "waiting_embedding", "embedding"
             job.locked_at, job.locked_by = None, None

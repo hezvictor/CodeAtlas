@@ -1,14 +1,27 @@
 ﻿from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..auth import create_access_token, create_refresh_token, hash_password, hash_refresh_token, verify_password
+
+from ..auth import (
+    create_access_token,
+    create_refresh_token,
+    hash_password,
+    hash_refresh_token,
+    verify_password,
+)
 from ..db import get_session
-from ..dependencies import current_user_id
 from ..models import RefreshToken, User
-from ..schemas import LoginRequest, LogoutRequest, RefreshRequest, RegisterRequest, TokenResponse, UserResponse
+from ..schemas import (
+    LoginRequest,
+    LogoutRequest,
+    RefreshRequest,
+    RegisterRequest,
+    TokenResponse,
+    UserResponse,
+)
 from ..services.problems import clone_system_problems
 
 router = APIRouter(prefix="/auth", tags=["auth"])

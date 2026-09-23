@@ -4,6 +4,8 @@ import {
   buildKnowledgePayload,
   createDraftConversation,
   deriveConversationTitle,
+  mergeMessagePage,
+  parseChatLaunch,
   sortMessages,
   sortConversations,
 } from "../../lib/chat-state";
@@ -14,14 +16,25 @@ test("new conversation starts as a local draft without an id", () => {
   assert.equal(draft.title, "新对话");
 });
 
+test("older message pages merge without duplicating messages already loaded", () => {
+  const older = [{ id: "1", role: "user" as const, created_at: "2026-01-01T00:00:00Z" }, { id: "2", role: "assistant" as const, created_at: "2026-01-01T00:00:01Z" }];
+  const current = [{ id: "2", role: "assistant" as const, created_at: "2026-01-01T00:00:01Z" }, { id: "3", role: "user" as const, created_at: "2026-01-01T00:00:02Z" }];
+  assert.deepEqual(mergeMessagePage(current, older).map(item => item.id), ["1", "2", "3"]);
+});
+
+test("problem detail links open the requested ACM mode safely", () => {
+  assert.deepEqual(parseChatLaunch("?problem_id=abc&mode=acm_solution"), { problemId: "abc", mode: "acm_solution" });
+  assert.deepEqual(parseChatLaunch("?problem_id=abc&mode=invalid"), { problemId: "abc", mode: "normal" });
+  assert.deepEqual(parseChatLaunch("?mode=acm_analysis"), { problemId: null, mode: "normal" });
+});
+
 test("first question derives a bounded conversation title", () => {
   assert.equal(deriveConversationTitle("  Explain Dijkstra's algorithm in detail  "), "Explain Dijkstra's algor…");
 });
 
-test("knowledge scope payload distinguishes none, all and selected groups", () => {
-  assert.deepEqual(buildKnowledgePayload("none", ""), { knowledge_scope: "none", knowledge_group_ids: [] });
-  assert.deepEqual(buildKnowledgePayload("all", ""), { knowledge_scope: "all", knowledge_group_ids: [] });
-  assert.deepEqual(buildKnowledgePayload("groups", "g-1"), { knowledge_scope: "groups", knowledge_group_ids: ["g-1"] });
+test("knowledge scope payload supports only none and all", () => {
+  assert.deepEqual(buildKnowledgePayload("none"), { knowledge_scope: "none" });
+  assert.deepEqual(buildKnowledgePayload("all"), { knowledge_scope: "all" });
 });
 
 test("pinned conversations sort before recent conversations", () => {

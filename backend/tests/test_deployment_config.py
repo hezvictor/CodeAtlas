@@ -1,5 +1,5 @@
-from pathlib import Path
 import os
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +14,19 @@ def test_production_rejects_default_credentials():
 
     with pytest.raises(ValueError):
         Settings(app_env="production", jwt_secret_key="replace-with-a-long-random-secret")
+
+
+def test_production_requires_model_credential_encryption_key():
+    from app.config import Settings
+
+    with pytest.raises(ValueError, match="MODEL_CREDENTIAL_ENCRYPTION_KEY"):
+        Settings(
+            app_env="production",
+            jwt_secret_key="j" * 32,
+            minio_root_password="m" * 32,
+            frontend_url="https://codeatlas.example.com",
+            model_credential_encryption_key="",
+        )
 
 
 def test_compose_does_not_hardcode_service_credentials():

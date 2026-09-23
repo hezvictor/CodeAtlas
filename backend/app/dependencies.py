@@ -1,11 +1,13 @@
 ﻿import uuid
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from .config import get_settings
 from .db import get_session
 from .models import User
-from sqlalchemy.ext.asyncio import AsyncSession
 
 bearer = HTTPBearer(auto_error=False)
 

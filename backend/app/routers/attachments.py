@@ -1,5 +1,5 @@
-import uuid
 import hashlib
+import uuid
 from pathlib import PurePath
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -8,12 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..dependencies import current_user_id
-from ..models import Attachment, Conversation, Document, DocumentVersion
-from ..schemas import AttachmentResponse
+from ..models import Attachment, Conversation, Document, DocumentJob, DocumentVersion
 from ..queue import dispatch_document_job
-from ..models import DocumentJob
+from ..schemas import AttachmentResponse
 from ..storage.s3 import S3Storage, object_key_for
-from .knowledge_documents import _validate_upload
+from .knowledge_documents import _validate_upload, read_limited_upload
 
 router = APIRouter(prefix="/conversations/{conversation_id}/attachments", tags=["knowledge"])
 
@@ -62,7 +61,7 @@ async def upload_attachment(
 ):
     await owned_conversation(conversation_id, user_id, session)
     filename = PurePath(file.filename or "document").name
-    data = await file.read()
+    data = await read_limited_upload(file)
     extension, mime_type = _validate_upload(filename, file.content_type, data)
     document = Document(
         user_id=user_id,

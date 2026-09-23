@@ -40,6 +40,7 @@ def test_model_configuration_exposes_a_connection_scoped_model_list_route():
 @pytest.mark.asyncio
 async def test_chat_model_resolution_never_falls_back_to_environment_credentials(monkeypatch):
     from fastapi import HTTPException
+
     from app.routers import conversations as conversations_module
 
     class Session:
@@ -70,3 +71,15 @@ def test_only_verified_embedding_configuration_enables_rag():
     assert embedding_config_is_verified(type("Config", (), {"status": "unverified"})()) is False
     assert embedding_config_is_verified(type("Config", (), {"status": "invalid"})()) is False
     assert embedding_config_is_verified(type("Config", (), {"status": "verified"})()) is True
+
+
+def test_project_embedding_default_enables_rag_without_user_override(monkeypatch):
+    from app.routers import conversations as conversations_module
+
+    monkeypatch.setattr(
+        conversations_module,
+        "get_settings",
+        lambda: type("Settings", (), {"dashscope_api_key": "project-key", "embedding_model": "text-embedding-v3"})(),
+    )
+
+    assert conversations_module.embedding_is_available(None) is True

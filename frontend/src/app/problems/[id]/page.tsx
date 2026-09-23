@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { use, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import Navbar from "../../../components/Navbar";
 import ProblemEditor, { ProblemDetail } from "../../../components/ProblemEditor";
 import { API, apiFetch, getToken } from "../../../lib/auth";
@@ -12,7 +12,7 @@ export default function ProblemDetailPage({ params }: { params: Promise<{ id: st
   const [problem, setProblem] = useState<ProblemDetail | null>(null);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
-  async function load() {
+  const load = useCallback(async () => {
     const token = getToken();
     if (!token) { setError("请先登录"); return; }
     try {
@@ -20,8 +20,8 @@ export default function ProblemDetailPage({ params }: { params: Promise<{ id: st
       if (!response.ok) throw new Error("题目不存在或无权访问");
       setProblem(await response.json());
     } catch (reason) { setError(reason instanceof Error ? reason.message : "题目加载失败"); reportError(reason, "题目加载失败"); }
-  }
-  useEffect(() => { void load(); }, [id]);
+  }, [id]);
+  useEffect(() => { void load(); }, [load]);
   async function remove() {
     if (!problem || !window.confirm(`确定删除“${problem.title}”吗？删除后不可恢复。`)) return;
     try {

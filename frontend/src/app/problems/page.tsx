@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Navbar from "../../components/Navbar";
 import ProblemCard, { ProblemSummary } from "../../components/ProblemCard";
 import ProblemEditor, { ProblemDetail } from "../../components/ProblemEditor";
@@ -22,7 +22,7 @@ export default function ProblemsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => { setToken(getToken()); }, []);
-  async function loadProblems() {
+  const loadProblems = useCallback(async () => {
     const access = token || getToken();
     if (!access) return;
     const params = new URLSearchParams({ page: String(page), page_size: "12" });
@@ -36,8 +36,8 @@ export default function ProblemsPage() {
       setResult(await response.json());
       setError("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "题库加载失败"); reportError(reason, "题库加载失败"); } finally { setLoading(false); }
-  }
-  useEffect(() => { if (!token) return; const timer = window.setTimeout(() => { void loadProblems(); }, 180); return () => window.clearTimeout(timer); }, [token, query, difficulty, tag, page]);
+  }, [token, query, difficulty, tag, page]);
+  useEffect(() => { if (!token) return; const timer = window.setTimeout(() => { void loadProblems(); }, 180); return () => window.clearTimeout(timer); }, [token, loadProblems]);
   function changeFilter(setter: (value: string) => void, value: string) { setPage(1); setter(value); }
   async function edit(problem: ProblemSummary) {
     try {

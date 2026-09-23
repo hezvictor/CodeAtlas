@@ -18,7 +18,7 @@ test("renders markdown documents as formatted content", () => {
 test("keeps non-markdown documents in a plain text preview", () => {
   const html = renderToStaticMarkup(<DocumentPreview filename="notes.txt" text={"line 1\nline 2"} />);
 
-  assert.match(html, /<pre>line 1\nline 2<\/pre>/);
+  assert.match(html, /<pre class="document-plain-preview">line 1\nline 2<\/pre>/);
 });
 
 test("does not render raw HTML from markdown documents", () => {

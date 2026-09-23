@@ -2,16 +2,18 @@ import asyncio
 import logging
 import uuid
 from functools import partial
+
 import boto3
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ..auth import hash_password, verify_password
-from ..dependencies import current_user_id
+from ..config import get_settings
 from ..db import get_session
+from ..dependencies import current_user_id
 from ..models import RefreshToken, User
 from ..schemas import PasswordUpdate, UserResponse, UserUpdate
-from ..config import get_settings
 
 router = APIRouter(prefix="/users", tags=["users"])
 logger = logging.getLogger(__name__)

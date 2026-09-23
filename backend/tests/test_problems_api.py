@@ -19,7 +19,7 @@ def test_problem_visibility_filter_allows_only_current_user_rows():
 
     assert expression is not None
     assert "owner_user_id" in str(expression)
-    assert str(user_id) in str(expression)
+    assert expression.right.value == user_id
     assert " OR " not in str(expression).upper()
 
 
@@ -95,7 +95,7 @@ async def test_clone_system_problems_creates_user_owned_default_rows():
     assert session.problem.owner_user_id == user_id
     assert session.problem.source_type == "default"
     assert session.problem.id != template.id
-    assert session.problem.slug == "default-a-plus-b"
+    assert session.problem.slug == f"default-a-plus-b-{user_id.hex}"
 
 
 @pytest.mark.asyncio

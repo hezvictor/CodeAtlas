@@ -14,7 +14,6 @@ from ..services.problems import (
     update_problem,
 )
 
-
 router = APIRouter(prefix="/problems", tags=["problems"])
 
 

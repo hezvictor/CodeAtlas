@@ -1,5 +1,6 @@
 ﻿"use client";
 import { FormEvent, useEffect, useState } from "react";
+/* eslint-disable @next/next/no-img-element -- Avatar URLs include local blob previews and short-lived user media URLs. */
 import Navbar from "../../components/Navbar";
 import { API, apiFetch, getToken, User } from "../../lib/auth";
 

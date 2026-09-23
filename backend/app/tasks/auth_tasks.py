@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, or_, and_
+from sqlalchemy import and_, delete, or_
 
 from ..config import get_settings
 from ..db import session_factory

@@ -1,7 +1,7 @@
 ﻿from functools import lru_cache
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def validate_embedding_dimension(configured: int, database_type: str) -> None:
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     chat_model: str = ""
     embedding_model: str = "text-embedding-v3"
     embedding_dimensions: int = 1024
+    embedding_batch_size: int = 16
+    embedding_max_input_chars: int = 12_000
+    reranker_base_url: str = ""
+    reranker_api_key: str = ""
+    reranker_model: str = ""
     model_credential_encryption_key: str = ""
     max_upload_size_bytes: int = 20 * 1024 * 1024
     max_extracted_text_chars: int = 2_000_000
@@ -61,7 +66,7 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET_KEY must not be empty")
         return value
 
-    @field_validator("embedding_dimensions", "max_upload_size_bytes", "max_extracted_text_chars", "document_job_max_attempts", "document_job_timeout_seconds", "embedding_max_retries", "chat_history_max_messages", "chat_history_max_chars", "rag_context_max_chars", "avatar_max_size_bytes", "refresh_token_retention_days")
+    @field_validator("embedding_dimensions", "embedding_batch_size", "embedding_max_input_chars", "max_upload_size_bytes", "max_extracted_text_chars", "document_job_max_attempts", "document_job_timeout_seconds", "embedding_max_retries", "chat_history_max_messages", "chat_history_max_chars", "rag_context_max_chars", "avatar_max_size_bytes", "refresh_token_retention_days")
     @classmethod
     def validate_positive_limits(cls, value: int, info) -> int:
         if value is None:
@@ -80,6 +85,8 @@ class Settings(BaseSettings):
             or "localhost" in self.frontend_url.lower()
         ):
             raise ValueError("Production credentials and browser URLs must not use development defaults")
+        if self.app_env.lower() in {"prod", "production"} and len(self.model_credential_encryption_key) < 32:
+            raise ValueError("MODEL_CREDENTIAL_ENCRYPTION_KEY must have at least 32 characters in production")
 
 
 @lru_cache

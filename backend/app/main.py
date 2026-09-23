@@ -4,24 +4,25 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from .config import get_settings, validate_embedding_dimension
 from .db import engine
 from .logging_config import configure_logging, request_id
+from .routers.attachments import router as attachments_router
 from .routers.auth import router as auth_router
 from .routers.conversations import router as conversations_router
-from .routers.users import router as users_router
-from .routers.knowledge_groups import router as knowledge_groups_router
-from .routers.knowledge_documents import router as knowledge_documents_router
-from .routers.attachments import router as attachments_router
-from .routers.problems import router as problems_router
 from .routers.dashboard import router as dashboard_router
-from .routers.model_connections import router as model_connections_router, utility_router as model_utility_router
+from .routers.knowledge_documents import router as knowledge_documents_router
+from .routers.knowledge_groups import router as knowledge_groups_router
+from .routers.model_connections import router as model_connections_router
+from .routers.model_connections import utility_router as model_utility_router
+from .routers.problems import router as problems_router
+from .routers.users import router as users_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -54,8 +55,9 @@ async def _validate_embedding_database() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    from .routers.conversations import configure_run_state, runs
     from redis.asyncio import from_url
+
+    from .routers.conversations import configure_run_state, runs
     await _validate_embedding_database()
     redis_client = from_url(settings.redis_url, decode_responses=True)
     configure_run_state(redis_client)

@@ -2,8 +2,10 @@
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+
 import jwt
 from argon2 import PasswordHasher
+
 from .config import get_settings
 
 password_hasher = PasswordHasher()

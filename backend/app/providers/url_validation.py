@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import socket
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -19,9 +20,20 @@ def validate_provider_base_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("provider base URL must use http or https")
     allow_local = os.getenv("CODEATLAS_ALLOW_LOCAL_PROVIDER_URLS", "").strip() == "1"
-    if _is_private_host(parsed.hostname) and not allow_local:
-        raise ValueError("provider URL targets a private network")
     if parsed.username or parsed.password:
         raise ValueError("provider base URL must not contain credentials")
+    private_literal = _is_private_host(parsed.hostname)
+    if parsed.scheme == "http" and os.getenv("APP_ENV", "development").lower() in {"prod", "production"} and not (allow_local and private_literal):
+        raise ValueError("provider base URL must use https in production")
+    if private_literal:
+        if not allow_local:
+            raise ValueError("provider URL targets a private network")
+    else:
+        try:
+            addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        except (OSError, ValueError) as error:
+            raise ValueError("provider URL hostname could not be resolved") from error
+        if not addresses or any(_is_private_host(address[4][0]) for address in addresses):
+            raise ValueError("provider URL targets a private network")
     path = parsed.path.rstrip("/")
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))

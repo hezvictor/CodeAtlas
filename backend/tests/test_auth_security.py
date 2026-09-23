@@ -70,8 +70,9 @@ def test_refresh_token_retention_defaults_to_expiry_window():
 
 
 def test_logout_locks_refresh_token_row_before_revoking():
-    from app.models import RefreshToken
     from sqlalchemy import select
+
+    from app.models import RefreshToken
 
     statement = select(RefreshToken).where(RefreshToken.token_hash == "hash").with_for_update()
     assert statement._for_update_arg is not None

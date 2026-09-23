@@ -1,5 +1,5 @@
-﻿from uuid import UUID
-from typing import TYPE_CHECKING
+﻿from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,7 @@ def message_context_metadata(message) -> dict:
     return {
         "problem_id": message.problem_id,
         "mode": message.mode or "normal",
+        "knowledge_scope": message.knowledge_scope or "none",
         "solution_language": message.solution_language,
     }
 
@@ -21,8 +22,6 @@ def message_context_metadata(message) -> dict:
 def validate_chat_context(
     mode: str, problem_id: UUID | None, solution_language: str | None
 ) -> tuple[UUID | None, str | None]:
-    if mode in ACM_MODES and problem_id is None:
-        raise ValueError("ACM mode requires a problem")
     if mode == "acm_analysis" and solution_language is not None:
         raise ValueError("ACM analysis mode does not accept a language")
     if mode == "acm_solution" and solution_language not in SOLUTION_LANGUAGES:

@@ -20,9 +20,10 @@ def trim_retrieved_chunks(chunks: list[RankedChunk], max_chars: int, limit: int)
     for chunk in chunks:
         if len(result) >= limit or chunk.content in seen:
             continue
-        if used + len(chunk.content) > max_chars:
+        content = chunk.prompt_content
+        if used + len(content) > max_chars:
             continue
         result.append(chunk)
         seen.add(chunk.content)
-        used += len(chunk.content)
+        used += len(content)
     return result

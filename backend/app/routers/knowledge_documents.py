@@ -1,6 +1,5 @@
 ﻿import hashlib
 import logging
-import mimetypes
 import uuid
 from datetime import UTC, datetime
 from pathlib import PurePath
@@ -103,6 +102,14 @@ def _validate_upload(filename: str, content_type: str | None, data: bytes) -> tu
     return extension, expected
 
 
+async def read_limited_upload(file: UploadFile) -> bytes:
+    limit = get_settings().max_upload_size_bytes
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise _upload_error(413, "FILE_TOO_LARGE", f"文件大小不能超过 {limit} 字节", "Document is too large")
+    return data
+
+
 @router.get("/policy")
 async def get_upload_policy():
     return upload_policy()
@@ -128,7 +135,7 @@ async def upload_document(
         if not group:
             raise HTTPException(404, "Knowledge group not found")
     filename = PurePath(file.filename or "document").name
-    data = await file.read(get_settings().max_upload_size_bytes + 1)
+    data = await read_limited_upload(file)
     extension, mime_type = _validate_upload(filename, file.content_type, data)
     document = Document(user_id=user_id, group_id=group_id, scope="long_term", title=(title or PurePath(filename).stem).strip()[:200] or "Untitled document")
     session.add(document)
@@ -160,7 +167,7 @@ async def upload_document(
 async def _upload_version(document: Document, file: UploadFile, title: str | None, session: AsyncSession) -> DocumentVersion:
     document = await _lock_document_for_version(document, session)
     filename = PurePath(file.filename or "document").name
-    data = await file.read(get_settings().max_upload_size_bytes + 1)
+    data = await read_limited_upload(file)
     extension, mime_type = _validate_upload(filename, file.content_type, data)
     max_version = await session.scalar(
         select(func.max(DocumentVersion.version_no)).where(DocumentVersion.document_id == document.id)

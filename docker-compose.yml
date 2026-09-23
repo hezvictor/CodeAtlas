@@ -86,7 +86,7 @@ services:
     depends_on:
       backend: {condition: service_healthy}
   postgres:
-    image: docker.m.daocloud.io/pgvector/pgvector:pg16
+    image: docker.m.daocloud.io/pgvector/pgvector@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     container_name: codeatlas-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
@@ -96,14 +96,14 @@ services:
     volumes: [postgres_data:/var/lib/postgresql/data]
     healthcheck: {test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"], interval: 5s, timeout: 5s, retries: 10}
   redis:
-    image: docker.m.daocloud.io/library/redis:7-alpine
+    image: docker.m.daocloud.io/library/redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     container_name: codeatlas-redis
     expose: ["6379"]
     volumes: [redis_data:/data]
     command: redis-server --appendonly yes
     healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10}
   minio:
-    image: docker.m.daocloud.io/minio/minio:latest
+    image: docker.m.daocloud.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: codeatlas-minio
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}

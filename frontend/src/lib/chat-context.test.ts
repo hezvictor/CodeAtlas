@@ -4,17 +4,19 @@ import { emptyConversationContext, restoreConversationContext } from "./chat-con
 
 test("restoring a conversation uses only its latest context-bearing message", () => {
   const context = restoreConversationContext([
-    { problem_id: "a", mode: "acm_analysis", solution_language: null },
-    { problem_id: "b", mode: "acm_solution", solution_language: "cpp" },
+    { problem_id: "a", mode: "acm_analysis", knowledge_scope: "all", solution_language: null },
+    { problem_id: null, mode: "normal", knowledge_scope: "none", solution_language: null },
   ]);
-  assert.equal(context.problemId, "b");
-  assert.equal(context.mode, "acm_solution");
-  assert.equal(context.solutionLanguage, "cpp");
+  assert.equal(context.problemId, "a");
+  assert.equal(context.mode, "normal");
+  assert.equal(context.knowledgeScope, "none");
+  assert.equal(context.solutionLanguage, null);
 });
 
 test("empty context clears ACM state", () => {
   const context = emptyConversationContext();
   assert.equal(context.mode, "normal");
+  assert.equal(context.knowledgeScope, "none");
   assert.equal(context.problemId, null);
   assert.equal(context.solutionLanguage, null);
 });

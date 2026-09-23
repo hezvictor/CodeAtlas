@@ -8,9 +8,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session
 from ..dependencies import current_user_id
-from ..models import ChatModel, Document, DocumentJob, DocumentVersion, EmbeddingConfig, ModelConnection, User
-from ..providers.embedding import validate_embedding_vectors
+from ..models import (
+    ChatModel,
+    Document,
+    DocumentJob,
+    DocumentVersion,
+    EmbeddingConfig,
+    ModelConnection,
+    RerankerConfig,
+    User,
+)
+from ..providers.embedding import project_embedding_is_configured
 from ..providers.openai_compatible import OpenAICompatibleChatProvider
+from ..providers.url_validation import validate_provider_base_url
 from ..schemas import (
     ChatModelCreate,
     ChatModelResponse,
@@ -19,9 +29,10 @@ from ..schemas import (
     ModelConnectionCreate,
     ModelConnectionResponse,
     ModelConnectionUpdate,
+    RerankerConfigResponse,
+    RerankerConfigUpdate,
 )
 from ..security.provider_credentials import decrypt_secret, encrypt_secret
-from ..providers.url_validation import validate_provider_base_url
 
 router = APIRouter(prefix="/model-connections", tags=["models"])
 utility_router = APIRouter(prefix="/model-connections", tags=["models"])
@@ -238,12 +249,27 @@ async def available_models(user_id=Depends(current_user_id), session: AsyncSessi
 
 def embedding_response(config: EmbeddingConfig | None) -> EmbeddingConfigResponse:
     settings = get_settings()
+    project_default = project_embedding_is_configured(settings)
     return EmbeddingConfigResponse(
         model_name=config.model_name if config else settings.embedding_model,
-        status=config.status if config else "unconfigured",
+        status=config.status if config else ("configured" if project_default else "unconfigured"),
         verification_error=config.verification_error if config else None,
         last_tested_at=config.last_tested_at if config else None,
-        configured=config is not None,
+        configured=config is not None or project_default,
+        source="user" if config else "project",
+    )
+
+
+def reranker_response(config: RerankerConfig | None) -> RerankerConfigResponse:
+    settings = get_settings()
+    return RerankerConfigResponse(
+        base_url=config.base_url if config else (settings.reranker_base_url or None),
+        model_name=config.model_name if config else settings.reranker_model,
+        status=config.status if config else ("configured" if settings.reranker_base_url and settings.reranker_model and settings.reranker_api_key else "disabled"),
+        verification_error=config.verification_error if config else None,
+        last_tested_at=config.last_tested_at if config else None,
+        configured=config is not None or bool(settings.reranker_base_url and settings.reranker_model and settings.reranker_api_key),
+        source="user" if config else "project",
     )
 
 
@@ -312,3 +338,46 @@ async def test_embedding_config(user_id=Depends(current_user_id), session: Async
                 # The durable dispatcher will retry queued jobs; connection validation remains successful.
                 pass
     return embedding_response(config)
+
+
+@utility_router.get("/reranker-config", response_model=RerankerConfigResponse)
+async def get_reranker_config(user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    return reranker_response(await session.scalar(select(RerankerConfig).where(RerankerConfig.user_id == user_id)))
+
+
+@utility_router.patch("/reranker-config", response_model=RerankerConfigResponse)
+async def update_reranker_config(payload: RerankerConfigUpdate, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    try:
+        base_url = validate_provider_base_url(payload.base_url)
+        secret = encrypt_secret(payload.api_key)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    config = await session.scalar(select(RerankerConfig).where(RerankerConfig.user_id == user_id))
+    if not config:
+        config = RerankerConfig(user_id=user_id, base_url=base_url, api_key_ciphertext=secret.ciphertext, api_key_nonce=secret.nonce, model_name=payload.model_name)
+        session.add(config)
+    else:
+        config.base_url, config.api_key_ciphertext, config.api_key_nonce, config.model_name = base_url, secret.ciphertext, secret.nonce, payload.model_name
+        config.status, config.verification_error, config.last_tested_at = "unverified", None, None
+    await session.commit()
+    await session.refresh(config)
+    return reranker_response(config)
+
+
+@utility_router.post("/reranker-config/test", response_model=RerankerConfigResponse)
+async def test_reranker_config(user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
+    from ..providers.reranker import RerankerProvider
+
+    config = await session.scalar(select(RerankerConfig).where(RerankerConfig.user_id == user_id))
+    if not config:
+        raise HTTPException(409, "Reranker is not configured")
+    try:
+        key = decrypt_secret(config.api_key_ciphertext, config.api_key_nonce)
+        await RerankerProvider(config.base_url, key, config.model_name).rerank("test", ["test document"])
+        config.status, config.verification_error = "verified", None
+    except Exception as error:
+        config.status, config.verification_error = "invalid", str(error)
+    config.last_tested_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(config)
+    return reranker_response(config)

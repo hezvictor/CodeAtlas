@@ -1,7 +1,9 @@
 ﻿import uuid
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator, model_validator
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+
 
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -61,6 +63,7 @@ class TokenResponse(BaseModel):
 class ConversationCreate(BaseModel):
     title: str = Field(default="新对话", min_length=1, max_length=200)
     mode: str = Field(default="normal", pattern="^normal$")
+    knowledge_scope: Literal["none", "all"] = "none"
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     pinned: bool | None = None
@@ -82,7 +85,7 @@ class BulkConversationRequest(BaseModel):
 
 class ConversationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; pinned: bool; selected_chat_model_id: uuid.UUID | None = None; created_at: datetime; updated_at: datetime
+    id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; knowledge_scope: Literal["none", "all"]; pinned: bool; selected_chat_model_id: uuid.UUID | None = None; created_at: datetime; updated_at: datetime
 
 
 class DashboardResponse(BaseModel):
@@ -95,19 +98,19 @@ class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None; chat_model_id: uuid.UUID | None = None; model_name_snapshot: str | None = None; retrieved_chunk_ids: list[uuid.UUID]
     duration_ms: int | None; first_token_latency_ms: int | None; problem_id: uuid.UUID | None
-    mode: str; solution_language: str | None; created_at: datetime
+    mode: str; knowledge_scope: Literal["none", "all"]; solution_language: str | None; created_at: datetime
 class MessagePage(BaseModel):
     items: list[MessageResponse]
     has_more: bool
     next_before: datetime | None
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1, max_length=20000)
     mode: str = Field(default="normal", pattern="^(normal|acm_analysis|acm_solution)$")
     solution_language: str | None = Field(default=None, pattern="^(cpp|java|python)$")
     chat_model_id: uuid.UUID | None = None
     attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
-    knowledge_group_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
-    knowledge_scope: Literal["none", "all", "groups"] = "all"
+    knowledge_scope: Literal["none", "all"] = "none"
     reuse_last_user: bool = False
     problem_id: uuid.UUID | None = None
 
@@ -118,16 +121,6 @@ class ChatRequest(BaseModel):
         if not value:
             raise ValueError("content must not be blank")
         return value
-
-    @model_validator(mode="after")
-    def normalize_knowledge_scope(self):
-        # Older clients only supplied group IDs. Keep that request shape working.
-        if self.knowledge_scope == "none" and self.knowledge_group_ids:
-            self.knowledge_scope = "groups"
-        if self.knowledge_scope == "groups" and not self.knowledge_group_ids:
-            raise ValueError("knowledge_group_ids is required when knowledge_scope is groups")
-        return self
-
 
 def _clean_text(value: str) -> str:
     value = value.strip()
@@ -257,7 +250,12 @@ class RetryRequest(BaseModel):
     @field_validator("content")
     @classmethod
     def normalize_content(cls, value):
-        return value.strip() if value is not None else value
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank")
+        return stripped
 
 
 class KnowledgeGroupCreate(BaseModel):
@@ -440,3 +438,21 @@ class EmbeddingConfigResponse(BaseModel):
     verification_error: str | None
     last_tested_at: datetime | None
     configured: bool
+    source: str
+
+
+class RerankerConfigUpdate(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: str = Field(min_length=1, max_length=500)
+    model_name: str = Field(min_length=1, max_length=120)
+
+
+class RerankerConfigResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    base_url: str | None
+    model_name: str
+    status: str
+    verification_error: str | None
+    last_tested_at: datetime | None
+    configured: bool
+    source: str

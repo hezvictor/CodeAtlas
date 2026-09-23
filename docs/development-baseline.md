@@ -1,41 +1,27 @@
 ﻿# CodeAtlas 当前开发基线
 
-版本：0.4 · 日期：2026-09-13 · 状态：Phase 4 题库与 ACM 工作流已完成
+更新：2026-09-23。此页描述当前仓库代码；`docs/superpowers/` 中的早期设计与计划保留为历史材料。
 
-## 阶段状态
+## 已接通的功能
 
-- Phase 1（账号与基础页面）：已完成。
-- Phase 2（普通会话与聊天）：已完成普通模式、SSE、持久化、停止/失败处理、重试和历史分页。
-- Phase 3（私人知识库与 RAG）：基础闭环已完成，包括分组、文件上传、MinIO、Arq Worker、解析、切块、1024 维 Embedding、pgvector/全文混合检索、引用校验、预览、下载和前端知识库页面。
-- Phase 4（题库与 ACM 工作流）：已完成题库列表/详情、系统题目种子、`@` 题目关联、ACM 分析/解题模式和 C++/Java/Python 语言选择；不引入 LangGraph 和 PostgreSQL checkpoint。
+- 账号：注册、登录、刷新、登出、个人资料与头像，服务端按用户隔离数据。
+- 题库：注册默认题目复制到用户空间，用户题目列表、筛选、详情、增删改，以及聊天中的 `@` 题目选择与详情页跳转。
+- 聊天：用户模型连接的保存/验证/默认选择，普通与 ACM 模式，会话管理、消息持久化、游标分页、编辑重试、重新生成、停止、运行状态和同进程 SSE 重连。
+- 知识库：分组管理，长期资料上传、版本、预览、下载、失败重试、重新索引；会话临时文件与已索引长期资料关联。
+- RAG：Redis/Arq 文档任务、结构化解析与切块、1024 维 Embedding、pgvector 和全文混合检索、可选 Reranker、相邻切片扩展、引用校验。只有聊天请求明确选择 `knowledge_scope=all` 才检索；`none` 不检索。
 
-## Phase 3 已实现
+## 运行机制与限制
 
-- 支持 Markdown、PDF、DOCX、TXT、C/C++、Java、Python 和 HTML 文件上传；不支持网页 URL 上传或抓取。
-- 私人分组和文档 CRUD；所有资源按当前用户隔离。
-- MinIO 私有 Bucket 保存原始文件，下载使用 5 分钟预签名 URL。
-- 文档版本不可变；状态为 uploaded、parsing、chunking、embedding、indexed、failed。
-- Arq + Redis 异步执行解析、切块和向量化，失败支持 API 重试/重新索引。
-- PostgreSQL pgvector 1024 维向量、全文 tsvector、RRF 混合召回。
-- 引用标记校验、引用持久化、SSE retrieval.completed/citations.validated/message.final。
-- /knowledge 分组管理、上传、搜索、状态和文档预览；聊天页可选择知识库分组并将 knowledge_group_ids 传入 RAG。
+- 生成任务由后端进程持有。Redis 租约负责跨进程互斥与停止信号，运行事件和已生成的内存快照只在持有该任务的进程内可重连；进程重启不会续生成。结果与状态持久化到消息表。
+- `POST /conversations/{id}/run/resume` 返回“可继续发送下一条请求”，不是恢复原模型流或 LangGraph checkpoint。
+- 分组仅管理长期资料，不控制 RAG 检索范围。RAG `all` 使用当前用户所有已索引长期资料和本会话关联文件。
+- 文件解析不含 OCR、图片理解、网页抓取或表格专用解析。ACM 解题没有编译、执行或在线评测；独立静态代码检查函数尚未接入聊天返回链路。
+- 浏览器当前将 access/refresh token 保存在 `localStorage`。部署时必须严格控制同源脚本与扩展来源；迁移到安全 Cookie/BFF 是后续安全改造，不应把当前方案描述为抗 XSS 凭证存储。
+- 用户可配置模型服务地址。现有 URL 校验拒绝直接填写的私网 IP、localhost 和部分内部域名，但域名解析/重绑定的 SSRF 防护仍需在受控网络出口完成；不要让后端访问不可信内网。
+- RAG 评测目录中的数据是离线契约和词面基线，不是在线检索或端到端生成评测。
 
-## 尚未实现或限制
+## 配置与验证
 
-- 不支持网页 URL 抓取、OCR、表格专用解析、图片理解和 rerank。
-- `resume` 仍是复用持久化消息，不是 checkpoint 恢复。
-- 在线评测、编译执行和提交结果不在本阶段范围内；解题模式只做服务端基础静态代码检查。
-- 前端暂未提供文档版本历史和独立引用跳转视图；已提供文本预览。
+复制 `.env.example` 为 `.env`。生产模式要求长度至少 32 的随机 JWT 密钥与模型凭证加密密钥、非默认 MinIO 密码和非 localhost 的前端地址。模型凭证加密密钥必须持久保存，轮换需先迁移旧密文。真实回答要先在前端验证聊天模型；真实 RAG 还需要 Embedding 提供方与已索引文档。
 
-## 运行与验证
-
-复制 .env.example 为 .env，配置 JWT_SECRET_KEY；真实回答和索引需要 DASHSCOPE_API_KEY、CHAT_MODEL、EMBEDDING_MODEL。
-
-```powershell
-docker compose up --build
-docker compose --profile test run --rm backend-test
-```
-
-当前验证记录为后端 Docker 测试 54 passed、前端 Docker 生产构建通过、前后端健康检查通过；本机 `next build` 因环境进程卡顿未完成。当前迁移文件链已到 `0007_problem_acm_workflow`。
-
-默认地址：前端 http://localhost:3000，后端 http://localhost:8000，MinIO 控制台 http://localhost:9001。
+本次代码验证：后端 `python -m pytest -q -p no:cacheprovider`、`ruff check app tests --no-cache`；前端 `npm test`、`npm run lint`、`npm run typecheck`、`npm run build`。这些检查主要覆盖单元和 API 合约，不能代替依赖真实 PostgreSQL、Redis、MinIO 与模型服务的部署验收。

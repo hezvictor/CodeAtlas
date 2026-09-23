@@ -1,5 +1,5 @@
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 
 def test_user_has_auth_version_default():
