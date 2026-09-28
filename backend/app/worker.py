@@ -25,7 +25,7 @@ class WorkerSettings:
     cron_jobs = [
         cron(dispatch_pending_document_jobs, second={0, 30}, unique=True),
         cron(recover_stale_document_jobs, second=15, unique=True),
-        cron(cleanup_deleted_document_objects, minute={0, 15, 30, 45}, unique=True),
+        cron(cleanup_deleted_document_objects, second={10, 40}, unique=True),
         cron(cleanup_refresh_tokens, hour={3}, minute=0, unique=True),
         cron(cleanup_refresh_tokens, minute=10, unique=True),
     ]

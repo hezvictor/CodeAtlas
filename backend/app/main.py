@@ -76,6 +76,8 @@ app = FastAPI(title="CodeAtlas API", version="0.1.0", lifespan=lifespan)
 
 @app.exception_handler(HTTPException)
 async def http_error_handler(_: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict):
+        return JSONResponse(status_code=exc.status_code, content={"code": exc.detail.get("code", "REQUEST_FAILED"), "message": exc.detail.get("message", "请求失败"), "details": jsonable_encoder(exc.detail)})
     code = "INVALID_CREDENTIALS" if exc.status_code == 401 and "password" in str(exc.detail).lower() else "REQUEST_FAILED"
     return JSONResponse(status_code=exc.status_code, content={"code": code, "message": str(exc.detail), "details": {}})
 

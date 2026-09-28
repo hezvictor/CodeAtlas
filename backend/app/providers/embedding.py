@@ -1,8 +1,9 @@
-import asyncio
+﻿import asyncio
 import logging
 import time
 
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,57 @@ from ..config import get_settings
 from ..models import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
+
+
+def embedding_batch_limit(model: str, configured: int) -> int:
+    limit = 10 if model in {"text-embedding-v3", "text-embedding-v4"} else 25
+    return min(limit, max(1, configured))
+
+
+def processing_error(error: Exception) -> tuple[str, str, bool]:
+    """Classify failures without persisting credentials, URLs or document input."""
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        try:
+            data = error.response.json()
+            provider = data.get("error") or data
+            code = str(provider.get("code", ""))[:80]
+            detail = str(provider.get("message", "")).lower()
+        except (ValueError, AttributeError, TypeError):
+            code, detail = "", ""
+        label = "向量服务请求失败"
+        if status in {401, 403}:
+            label = "Embedding 配置或权限无效，请检查模型配置"
+        elif status == 429:
+            label = "向量服务限流，等待自动重试"
+        elif status >= 500:
+            label = "向量服务暂时不可用，等待自动重试"
+        elif "batch" in detail:
+            label = "向量请求批次超出模型限制"
+        elif "length" in detail or "token" in detail:
+            label = "文本切块超出模型输入长度限制"
+        # Provider codes are identifiers, not arbitrary response content.
+        safe_code = "".join(char for char in code if char.isalnum() or char in "_-.")
+        return f"EMBEDDING_HTTP_{status}", f"{label}（HTTP {status}{' · ' + safe_code if safe_code else ''}）", status == 429 or status >= 500
+    if isinstance(error, (httpx.TimeoutException, httpx.TransportError, TimeoutError, ConnectionError)):
+        return "SERVICE_UNAVAILABLE", "网络或服务暂时不可用，等待自动重试", True
+    if isinstance(error, ClientError):
+        status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+        if status == 404:
+            return "SOURCE_FILE_MISSING", "原文件不存在，请删除此记录后重新上传", False
+        return "SOURCE_STORAGE_ERROR", "原文件存储服务访问失败，请检查服务和权限", status >= 500 or status == 429
+    if isinstance(error, BotoCoreError):
+        return "SOURCE_STORAGE_UNAVAILABLE", "原文件存储服务暂时不可用，等待自动重试", True
+    if isinstance(error, ValueError):
+        message = str(error)
+        if message.startswith("embedding dimension mismatch"):
+            message = "向量维度与数据库配置不一致，请检查 Embedding 模型和维度配置"
+        elif message.startswith("embedding count mismatch"):
+            message = "向量服务返回数量与文本块数量不一致，索引未启用"
+        elif message.startswith("embedding input"):
+            message = "文本块为空或超出模型输入长度限制，请检查文件内容和切块配置"
+        return "INVALID_DOCUMENT", message[:300], False
+    return "DOCUMENT_PROCESSING_FAILED", "文档处理失败，请重试或联系管理员", False
 
 
 def project_embedding_is_configured(settings=None) -> bool:
@@ -40,7 +92,7 @@ class EmbeddingProvider:
                 raise ValueError(f"embedding input {index} is empty")
             if len(text) > max_chars:
                 raise ValueError(f"embedding input {index} exceeds {max_chars} characters")
-        batch_size = max(1, int(getattr(settings, "embedding_batch_size", 16)))
+        batch_size = embedding_batch_limit(model, int(getattr(settings, "embedding_batch_size", 10)))
         vectors: list[list[float]] = []
         timeout = httpx.Timeout(120, connect=10)
         async with httpx.AsyncClient(timeout=timeout) as client:

@@ -80,3 +80,36 @@ async def test_embedding_documents_batches_inputs_and_preserves_order(monkeypatc
 
     assert client.batch_sizes == [2, 2, 1]
     assert vectors == [[0.0, 1.0], [1.0, 1.0], [0.0, 1.0], [1.0, 1.0], [0.0, 1.0]]
+
+
+@pytest.mark.asyncio
+async def test_v3_never_exceeds_provider_batch_limit(monkeypatch):
+    import app.providers.embedding as module
+
+    sizes = []
+
+    class Client(_Client):
+        async def post(self, _url, *, headers, json):
+            sizes.append(len(json["input"]))
+            if len(json["input"]) > 10:
+                return httpx.Response(400, json={"error": {"code": "InvalidParameter", "message": "batch too large"}}, request=httpx.Request("POST", "https://provider/embeddings"))
+            return httpx.Response(200, json={"data": [{"index": i, "embedding": [float(value), 1.0]} for i, value in enumerate(json["input"])]}, request=httpx.Request("POST", "https://provider/embeddings"))
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_: Client())
+    monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(dashscope_api_key="key", embedding_model="text-embedding-v3", embedding_dimensions=2, embedding_batch_size=16, embedding_max_retries=0, dashscope_base_url="https://provider"))
+    assert await module.EmbeddingProvider().embed_documents([str(i) for i in range(23)]) == [[float(i), 1.0] for i in range(23)]
+    assert sizes == [10, 10, 3]
+
+
+def test_provider_failure_classification_preserves_safe_code_without_credentials():
+    from app.providers.embedding import processing_error
+
+    request = httpx.Request("POST", "https://provider/embeddings", headers={"Authorization": "Bearer secret"})
+    error = httpx.HTTPStatusError("bad", request=request, response=httpx.Response(400, json={"error": {"code": "InvalidParameter", "message": "batch size must not exceed 10"}}))
+    code, message, retryable = processing_error(error)
+    assert code == "EMBEDDING_HTTP_400"
+    assert "InvalidParameter" in message
+    assert "secret" not in message
+    assert retryable is False
+    transient = httpx.HTTPStatusError("limited", request=request, response=httpx.Response(429))
+    assert processing_error(transient)[2] is True

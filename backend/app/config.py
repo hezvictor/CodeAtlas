@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     chat_model: str = ""
     embedding_model: str = "text-embedding-v3"
     embedding_dimensions: int = 1024
-    embedding_batch_size: int = 16
+    embedding_batch_size: int = 10
     embedding_max_input_chars: int = 12_000
     reranker_base_url: str = ""
     reranker_api_key: str = ""
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     rag_context_max_chars: int = 40_000
     avatar_max_size_bytes: int = 2 * 1024 * 1024
     allowed_document_extensions: set[str] = {
-        ".md", ".markdown", ".pdf", ".docx", ".txt", ".c", ".cc", ".cpp", ".h", ".hpp",
+        ".md", ".markdown", ".docx", ".txt", ".c", ".cc", ".cpp", ".h", ".hpp",
         ".java", ".py", ".html", ".htm",
     }
     frontend_url: str = "http://localhost:3000"

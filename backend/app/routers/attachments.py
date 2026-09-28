@@ -3,7 +3,7 @@ import uuid
 from pathlib import PurePath
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
@@ -11,6 +11,7 @@ from ..dependencies import current_user_id
 from ..models import Attachment, Conversation, Document, DocumentJob, DocumentVersion
 from ..queue import dispatch_document_job
 from ..schemas import AttachmentResponse
+from ..services.document_lifecycle import mark_document_deleted
 from ..storage.s3 import S3Storage, object_key_for
 from .knowledge_documents import _validate_upload, read_limited_upload
 
@@ -60,13 +61,14 @@ async def upload_attachment(
     session: AsyncSession = Depends(get_session),
 ):
     await owned_conversation(conversation_id, user_id, session)
-    filename = PurePath(file.filename or "document").name
+    filename = PurePath((file.filename or "document").replace("\\", "/")).name
     data = await read_limited_upload(file)
     extension, mime_type = _validate_upload(filename, file.content_type, data)
     document = Document(
         user_id=user_id,
         group_id=None,
         scope="session",
+        filename=filename,
         title=(title or PurePath(filename).stem).strip()[:200] or "Session file",
     )
     session.add(document)
@@ -80,11 +82,10 @@ async def upload_attachment(
         size_bytes=len(data),
         sha256=hashlib.sha256(data).hexdigest(),
         object_key=object_key_for(str(user_id), "session", str(document.id), 1, filename),
-        status="uploaded",
+        status="queued",
     )
     session.add(version)
     await session.flush()
-    document.current_version_id = version.id
     attachment = Attachment(user_id=user_id, conversation_id=conversation_id, document_version_id=version.id)
     session.add(attachment)
     job = DocumentJob(document_version_id=version.id, stage="parsing", status="queued", attempts=0)
@@ -113,7 +114,7 @@ async def upload_attachment(
 @router.post("/{document_version_id}", response_model=AttachmentResponse, status_code=201)
 async def attach_document(conversation_id: uuid.UUID, document_version_id: uuid.UUID, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     await owned_conversation(conversation_id, user_id, session)
-    version = await session.scalar(select(DocumentVersion).join(Document, DocumentVersion.document_id == Document.id).where(DocumentVersion.id == document_version_id, Document.user_id == user_id, DocumentVersion.status == "indexed"))
+    version = await session.scalar(select(DocumentVersion).join(Document, DocumentVersion.document_id == Document.id).where(DocumentVersion.id == document_version_id, Document.user_id == user_id, Document.deleted_at.is_(None), Document.current_version_id == DocumentVersion.id, DocumentVersion.status == "indexed"))
     if not version:
         raise HTTPException(404, "Indexed document version not found")
     existing = await session.scalar(select(Attachment).where(Attachment.conversation_id == conversation_id, Attachment.document_version_id == document_version_id))
@@ -140,5 +141,5 @@ async def detach_document(conversation_id: uuid.UUID, attachment_id: uuid.UUID, 
     )
     await session.delete(attachment)
     if document and document.scope == "session":
-        document.deleted_at = func.now()
+        await mark_document_deleted(session, document.id)
     await session.commit()

@@ -45,7 +45,7 @@ async def retrieve_chunks(
                 )
             )).all()
         )
-    filters = [Document.user_id == user_id, Document.deleted_at.is_(None), DocumentVersion.status == "indexed"]
+    filters = [Document.user_id == user_id, Document.deleted_at.is_(None), DocumentVersion.status == "indexed", Document.current_version_id == DocumentVersion.id, DocumentChunk.index_job_id.is_not_distinct_from(DocumentVersion.active_index_job_id)]
     scope_filters = []
     if scope == "all":
         scope_filters.append(Document.scope == "long_term")
@@ -105,6 +105,7 @@ async def retrieve_chunks(
             select(DocumentChunk)
             .where(
                 DocumentChunk.document_version_id == item.document_version_id,
+                DocumentChunk.index_job_id.is_not_distinct_from(select(DocumentVersion.active_index_job_id).where(DocumentVersion.id == item.document_version_id).scalar_subquery()),
                 DocumentChunk.ordinal.between(max(0, item.ordinal - 1), item.ordinal + 1),
                 DocumentChunk.id != item.chunk_id,
             )

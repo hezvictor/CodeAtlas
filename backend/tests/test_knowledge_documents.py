@@ -2,6 +2,15 @@ import pytest
 from fastapi import HTTPException
 
 
+def test_new_pdf_upload_is_rejected_but_existing_parser_is_retained():
+    from app.routers.knowledge_documents import _validate_upload, upload_policy
+
+    with pytest.raises(HTTPException) as error:
+        _validate_upload("notes.pdf", "application/pdf", b"%PDF-1.7")
+    assert error.value.status_code == 400
+    assert ".pdf" not in upload_policy()["extensions"]
+
+
 def test_document_upload_validation_accepts_html_and_rejects_unknown_extension():
     from app.routers.knowledge_documents import _validate_upload
 

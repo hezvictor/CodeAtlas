@@ -297,6 +297,25 @@ class DocumentVersionResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     indexed_at: datetime | None
+    storage_deleted_at: datetime | None = None
+    content_deleted_at: datetime | None = None
+    cleanup_pending: bool = False
+
+
+class DocumentJobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    document_version_id: uuid.UUID
+    status: str
+    stage: str
+    attempts: int
+    total_chunks: int = 0
+    completed_chunks: int = 0
+    available_at: datetime
+    error_code: str | None = None
+    error_message: str | None = None
+    finished_at: datetime | None = None
+    acknowledged_at: datetime | None = None
 
 
 class DocumentResponse(BaseModel):
@@ -309,6 +328,11 @@ class DocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_version: DocumentVersionResponse | None = None
+    active_version: DocumentVersionResponse | None = None
+    operation: DocumentJobResponse | None = None
+    cleanup_status: str | None = None
+    cleanup_error: str | None = None
+    deleted_at: datetime | None = None
 
 
 class DocumentPreviewResponse(BaseModel):
@@ -318,6 +342,7 @@ class DocumentPreviewResponse(BaseModel):
 
 
 class CitationSourceResponse(BaseModel):
+    source_deleted: bool = False
     id: uuid.UUID
     chunk_id: uuid.UUID
     document_id: uuid.UUID

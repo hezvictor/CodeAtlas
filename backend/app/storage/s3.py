@@ -4,13 +4,14 @@ from functools import partial
 from pathlib import PurePath
 
 import boto3
+from botocore.config import Config
 
 from ..config import get_settings
 
 
 def object_key_for(user_id: str, group_id: str | None, document_id: str, version_no: int, filename: str) -> str:
     safe_name = PurePath(filename).name
-    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", safe_name)[:180] or "document"
+    safe_name = re.sub(r"[\x00-\x1f/\\]", "_", safe_name)[:255] or "document"
     scope_key = group_id or "long-term"
     return f"users/{user_id}/scopes/{scope_key}/documents/{document_id}/versions/{version_no}/{safe_name}"
 
@@ -23,6 +24,7 @@ class S3Storage:
             "aws_access_key_id": settings.minio_root_user,
             "aws_secret_access_key": settings.minio_root_password,
             "region_name": settings.s3_region,
+            "config": Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 2}),
         }
         self.client = boto3.client("s3", endpoint_url=settings.s3_endpoint, **credentials)
         browser_endpoint = getattr(settings, "browser_s3_endpoint", "") or settings.s3_endpoint
@@ -47,7 +49,15 @@ class S3Storage:
         return await asyncio.to_thread(response["Body"].read)
 
     async def delete(self, key: str) -> None:
-        await asyncio.to_thread(partial(self.client.delete_object, Bucket=self.bucket, Key=key))
+        try:
+            await asyncio.to_thread(partial(self.client.delete_object, Bucket=self.bucket, Key=key))
+        except self.client.exceptions.ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in {"NoSuchKey", "NoSuchBucket"}:
+                raise
 
-    async def presigned_get(self, key: str, expires: int = 300) -> str:
-        return await asyncio.to_thread(partial(self.browser_client.generate_presigned_url, "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=expires))
+    async def presigned_get(self, key: str, expires: int = 300, filename: str | None = None) -> str:
+        from urllib.parse import quote
+        params = {"Bucket": self.bucket, "Key": key}
+        if filename:
+            params["ResponseContentDisposition"] = "attachment; filename*=UTF-8''" + quote(filename, safe="")
+        return await asyncio.to_thread(partial(self.browser_client.generate_presigned_url, "get_object", Params=params, ExpiresIn=expires))

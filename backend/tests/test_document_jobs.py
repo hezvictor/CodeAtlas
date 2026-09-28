@@ -39,7 +39,7 @@ class _FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_document_job_uses_stable_arq_job_id(monkeypatch):
+async def test_repeated_delivery_is_not_suppressed_by_retained_arq_result(monkeypatch):
     import app.queue as queue_module
 
     pool = _FakePool()
@@ -51,11 +51,9 @@ async def test_enqueue_document_job_uses_stable_arq_job_id(monkeypatch):
 
     job_id = str(uuid4())
     await queue_module.enqueue_document_job(job_id)
-
-    assert pool.calls == [(
-        ("process_document", job_id),
-        {"_job_id": f"document-job:{job_id}"},
-    )]
+    await queue_module.enqueue_document_job(job_id)
+    assert [call[0] for call in pool.calls] == [("process_document", job_id)] * 2
+    assert pool.calls[0][1]["_job_id"] != pool.calls[1][1]["_job_id"]
 
 
 @pytest.mark.asyncio

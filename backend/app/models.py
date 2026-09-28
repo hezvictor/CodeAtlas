@@ -131,8 +131,11 @@ class Document(Base):
     group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("knowledge_groups.id", ondelete="SET NULL"), nullable=True)
     scope: Mapped[str] = mapped_column(String(20), nullable=False, default="long_term", server_default="long_term")
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleanup_status: Mapped[str | None] = mapped_column(String(20))
+    cleanup_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -160,6 +163,10 @@ class DocumentVersion(Base):
     extracted_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    active_index_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    upload_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), unique=True)
+    cleanup_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    content_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     storage_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     storage_delete_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     storage_delete_error: Mapped[str | None] = mapped_column(Text)
@@ -172,12 +179,13 @@ class DocumentVersion(Base):
 class DocumentChunk(Base):
     __tablename__ = "document_chunks"
     __table_args__ = (
-        Index("ix_document_chunks_version_ordinal", "document_version_id", "ordinal", unique=True),
+        Index("ix_document_chunks_version_ordinal", "document_version_id", "index_job_id", "ordinal", unique=True),
         Index("ix_document_chunks_version_id", "document_version_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
+    index_job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -211,7 +219,10 @@ class Citation(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
-    chunk_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_chunks.id", ondelete="CASCADE"), nullable=False)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("document_chunks.id", ondelete="SET NULL"), nullable=True)
+    chunk_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    group_name_snapshot: Mapped[str | None] = mapped_column(String(100))
     quote: Mapped[str] = mapped_column(Text, nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     rank: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -241,6 +252,10 @@ class DocumentJob(Base):
     stage: Mapped[str] = mapped_column(String(20), nullable=False, default="parsing")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    completed_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     locked_by: Mapped[str | None] = mapped_column(String(100))

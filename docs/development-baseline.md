@@ -1,6 +1,6 @@
 ﻿# CodeAtlas 当前开发基线
 
-更新：2026-09-23。此页描述当前仓库代码；`docs/superpowers/` 中的早期设计与计划保留为历史材料。
+更新：2026-09-28。此页描述当前仓库代码；`docs/superpowers/` 中的早期设计与计划保留为历史材料。
 
 ## 已接通的功能
 
@@ -22,6 +22,10 @@
 
 ## 配置与验证
 
+文档上传与索引分离：202 仅确认 MinIO 原件和持久化任务；可检索由 active version/index generation 控制。新版本失败保留旧索引，成功切换后清理旧内容。删除先排除检索，再异步清理原件/文本/向量。进度、错误、重试时间和已读标记均保存在 PostgreSQL，页面离开后后台继续。PDF 的新上传、重试与重新索引暂时关闭，已有可检索 PDF 不受影响。
+
+生命周期集成测试使用独立 schema 和真实 PostgreSQL/pgvector，设置 `RUN_LIFECYCLE_INTEGRATION=1` 后运行。存储与模型边界可替换，数据库事务、索引切换、删除竞态、检索过滤和历史引用均实际执行。`tests/lifecycle_smoke_server.py` 仅供隔离数据库的浏览器测试，生产镜像不包含测试替身。
+
 复制 `.env.example` 为 `.env`。生产模式要求长度至少 32 的随机 JWT 密钥与模型凭证加密密钥、非默认 MinIO 密码和非 localhost 的前端地址。模型凭证加密密钥必须持久保存，轮换需先迁移旧密文。真实回答要先在前端验证聊天模型；真实 RAG 还需要 Embedding 提供方与已索引文档。
 
-本次代码验证：后端 `python -m pytest -q -p no:cacheprovider`、`ruff check app tests --no-cache`；前端 `npm test`、`npm run lint`、`npm run typecheck`、`npm run build`。这些检查主要覆盖单元和 API 合约，不能代替依赖真实 PostgreSQL、Redis、MinIO 与模型服务的部署验收。
+本次代码验证：后端完整测试 149 项通过（开启真实 PostgreSQL/pgvector 集成）、Ruff 通过；前端 37 项测试、ESLint、TypeScript 与生产构建通过。另已实际验证 MinIO、Redis、DashScope 19 块向量化、跨页面后台处理、版本切换与删除清理，详见 [知识库生命周期验收记录](knowledge-ingestion-acceptance-2026-09-28.md)。这些验证聚焦本次上传与索引链路，不代表回答质量评测。

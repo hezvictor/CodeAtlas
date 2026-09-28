@@ -33,5 +33,5 @@ def test_upload_policy_exposes_supported_extensions_and_size():
     from app.routers.knowledge_documents import upload_policy
 
     policy = upload_policy()
-    assert ".pdf" in policy["extensions"]
+    assert ".pdf" not in policy["extensions"]
     assert policy["max_size_bytes"] > 0

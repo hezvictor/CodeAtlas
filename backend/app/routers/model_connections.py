@@ -318,7 +318,7 @@ async def test_embedding_config(user_id=Depends(current_user_id), session: Async
                 select(DocumentJob)
                 .join(DocumentVersion, DocumentJob.document_version_id == DocumentVersion.id)
                 .join(Document, DocumentVersion.document_id == Document.id)
-                .where(Document.user_id == user_id, DocumentJob.status == "waiting_embedding")
+                .where(Document.user_id == user_id, Document.deleted_at.is_(None), DocumentJob.status == "waiting_embedding", DocumentVersion.extension != ".pdf", DocumentVersion.cleanup_pending.is_(False))
             )
         ).all()
         for job in pending_jobs:
@@ -326,8 +326,8 @@ async def test_embedding_config(user_id=Depends(current_user_id), session: Async
             job.available_at = datetime.now(UTC)
             job.error_message = None
             version = await session.get(DocumentVersion, job.document_version_id)
-            if version:
-                version.status = "uploaded"
+            if version and version.status != "indexed":
+                version.status = "queued"
         await session.commit()
         from ..queue import dispatch_document_job
 

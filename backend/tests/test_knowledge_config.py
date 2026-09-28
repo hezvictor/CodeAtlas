@@ -11,7 +11,7 @@ def test_knowledge_settings_expose_embedding_and_upload_defaults():
     assert settings.max_upload_size_bytes == 20 * 1024 * 1024
     assert ".html" in settings.allowed_document_extensions
     assert Settings().embedding_dimensions == 1024
-    assert Settings().embedding_batch_size == 16
+    assert Settings().embedding_batch_size == 10
     assert Settings().embedding_max_input_chars == 12000
 
 

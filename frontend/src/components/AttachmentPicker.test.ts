@@ -27,3 +27,12 @@ test("only indexed long-term documents can be attached", () => {
   ];
   assert.deepEqual(indexedDocumentOptions(documents).map(item => item.id), ["a"]);
 });
+
+test("an active version stays selectable while its replacement is processing", () => {
+  const documents = [
+    { id: "a", title: "Replacing", latest_version: { id: "v2", status: "embedding" }, active_version: { id: "v1", status: "indexed" } },
+    { id: "b", title: "Deleted", latest_version: { id: "v3", status: "indexed" }, active_version: null, deleted_at: "today" },
+    { id: "c", title: "Not active", latest_version: { id: "v4", status: "indexed" }, active_version: null },
+  ];
+  assert.deepEqual(indexedDocumentOptions(documents).map(item => item.id), ["a"]);
+});

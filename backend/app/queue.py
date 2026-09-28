@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 try:
     from arq import create_pool
@@ -23,7 +24,7 @@ async def enqueue_document_job(job_id: str) -> None:
     settings = RedisSettings.from_dsn(get_settings().redis_url) if RedisSettings else get_settings().redis_url
     pool = await create_pool(settings)
     try:
-        await pool.enqueue_job("process_document", job_id, _job_id=f"document-job:{job_id}")
+        await pool.enqueue_job("process_document", job_id, _job_id=f"document-job:{job_id}:{uuid4()}")
     finally:
         await pool.aclose()
 
