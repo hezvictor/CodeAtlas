@@ -1,0 +1,63 @@
+:root {
+  --motion-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --motion-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-duration-dialog: 200ms;
+  --motion-duration-drawer: 250ms;
+  --motion-duration-notice: 160ms;
+  --motion-duration-press: 160ms;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .problem-editor {
+    transform: translateX(0);
+    transition: transform var(--motion-duration-drawer) var(--motion-ease-drawer);
+  }
+
+  .language-dialog {
+    transform-origin: center;
+    transform: scale(1);
+    opacity: 1;
+    transition:
+      transform var(--motion-duration-dialog) var(--motion-ease-out),
+      opacity var(--motion-duration-dialog) var(--motion-ease-out);
+  }
+
+  .global-notice,
+  .toast {
+    opacity: 1;
+    transition: opacity var(--motion-duration-notice) var(--motion-ease-out);
+  }
+
+  .problem-hero-actions > button.pill,
+  .drawer-actions > button.pill {
+    transform: scale(1);
+    transition: transform var(--motion-duration-press) var(--motion-ease-out);
+  }
+
+  .problem-hero-actions > button.pill:enabled:active:not(:focus-visible),
+  .drawer-actions > button.pill:enabled:active:not(:focus-visible) {
+    transform: scale(0.97);
+  }
+
+  .problem-hero-actions > button.pill:focus-visible,
+  .drawer-actions > button.pill:focus-visible {
+    transform: scale(1);
+    transition: none;
+  }
+
+  @starting-style {
+    .problem-editor {
+      transform: translateX(100%);
+    }
+
+    .language-dialog {
+      transform: scale(0.97);
+      opacity: 0;
+    }
+
+    .global-notice,
+    .toast {
+      opacity: 0;
+    }
+  }
+}

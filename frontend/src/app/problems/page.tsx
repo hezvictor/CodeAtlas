@@ -62,12 +62,13 @@ export default function ProblemsPage() {
       <div className="problems-hero"><div><h1 className="page-title">我的题库</h1><p className="sub">注册默认题目和你创建的题目，都可以在这里持续整理。</p></div><div className="problem-hero-actions"><div className="problem-count">{result ? `${result.total} 道题目` : "加载题目…"}</div><button className="pill fill" type="button" onClick={() => setEditorProblem(null)}>＋ 新建题目</button></div></div>
       <ProblemFilters query={query} difficulty={difficulty} tag={tag} onQueryChange={(value) => changeFilter(setQuery, value)} onDifficultyChange={(value) => changeFilter(setDifficulty, value)} onTagChange={(value) => changeFilter(setTag, value)} />
       {error && <div className="panel problem-empty"><strong>{error}</strong><p className="muted">请刷新页面后重试。</p></div>}
-      {!error && loading && <div className="panel problem-empty">正在加载题库…</div>}
-      {!error && !loading && result && !result.items.length && <div className="panel problem-empty"><strong>没有找到匹配题目</strong><p className="muted">换个关键词或创建一道新题目。</p></div>}
-      {!error && !loading && result && !!result.items.length && <>
+      {!error && loading && !result && <div className="panel problem-empty">正在加载题库…</div>}
+      {!error && result && <div className="problem-refresh-status" role="status" aria-live="polite">{loading ? "正在更新题库，当前显示上次结果…" : ""}</div>}
+      {!error && result && !result.items.length && <div className="panel problem-empty"><strong>没有找到匹配题目</strong><p className="muted">换个关键词或创建一道新题目。</p></div>}
+      {!error && result && !!result.items.length && <>
         <div className="problem-list-head"><span>唯一 ID</span><span>题目与分类</span><span>来源 / 语言</span><span>操作</span></div>
         <div className="problem-list">{result.items.map((problem) => <ProblemCard key={problem.id} problem={problem} onEdit={edit} onDelete={remove} />)}</div>
-        <div className="problem-pagination"><button className="pill" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</button><span className="muted">第 {page} 页</span><button className="pill" disabled={page * result.page_size >= result.total} onClick={() => setPage((value) => value + 1)}>下一页</button></div>
+        <div className="problem-pagination"><button className="pill" disabled={loading || page <= 1} onClick={() => setPage((value) => value - 1)}>上一页</button><span className="muted">第 {result.page} 页</span><button className="pill" disabled={loading || page * result.page_size >= result.total} onClick={() => setPage((value) => value + 1)}>下一页</button></div>
       </>}
     </main>
     {editorProblem !== undefined && <ProblemEditor problem={editorProblem} onClose={() => setEditorProblem(undefined)} onSaved={() => { setEditorProblem(undefined); void loadProblems(); }} />}
