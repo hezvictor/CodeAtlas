@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import logging.config
 from contextvars import ContextVar
 
@@ -9,6 +9,12 @@ class RequestIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id.get()
         return True
+
+
+class TemporaryAccessFilter(logging.Filter):
+    def filter(self, record):
+        # Access URLs may contain an ephemeral file ID. Do not persist them.
+        return "/temporary-files" not in record.getMessage()
 
 
 def configure_logging(level: str) -> None:
@@ -22,3 +28,4 @@ def configure_logging(level: str) -> None:
             "root": {"level": level, "handlers": ["console"]},
         }
     )
+    logging.getLogger("uvicorn.access").addFilter(TemporaryAccessFilter())

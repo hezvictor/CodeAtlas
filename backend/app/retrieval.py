@@ -1,4 +1,4 @@
-from collections.abc import Callable
+﻿from collections.abc import Callable
 from dataclasses import dataclass
 from inspect import isawaitable
 from uuid import UUID
@@ -71,8 +71,7 @@ def rrf_merge(keyword: list[RankedChunk], vector: list[RankedChunk], limit: int 
     ranked_ids = sorted(
         scores,
         key=lambda chunk_id: (
-            -scores[chunk_id]
-            - (1 / (k * k) if by_id[chunk_id].source_type == "session" else 0),
+            -scores[chunk_id],
             order[chunk_id],
         ),
     )[:limit]

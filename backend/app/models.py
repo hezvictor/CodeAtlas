@@ -54,7 +54,6 @@ class Conversation(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
     mode: Mapped[str] = mapped_column(String(30), default="normal")
-    knowledge_scope: Mapped[str] = mapped_column(String(10), default="none", server_default=text("'none'"))
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     selected_chat_model_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -75,7 +74,6 @@ class Message(Base):
     first_token_latency_ms: Mapped[int | None] = mapped_column()
     problem_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("problems.id", ondelete="SET NULL"), index=True)
     mode: Mapped[str] = mapped_column(String(30), default="normal")
-    knowledge_scope: Mapped[str] = mapped_column(String(10), default="none", server_default=text("'none'"))
     solution_language: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -202,17 +200,6 @@ class DocumentChunk(Base):
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR)
 
 
-class Attachment(Base):
-    __tablename__ = "attachments"
-    __table_args__ = (Index("ix_attachments_conversation_id", "conversation_id"),)
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
-    document_version_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
 class Citation(Base):
     __tablename__ = "citations"
     __table_args__ = (Index("ix_citations_message_id", "message_id"), Index("uq_citations_message_chunk", "message_id", "chunk_id", unique=True))
@@ -294,8 +281,38 @@ class ChatModel(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="unverified", server_default="unverified")
     verification_error: Mapped[str | None] = mapped_column(Text)
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    capabilities: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+    context_window_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ChatRun(Base):
+    __tablename__ = "chat_runs"
+    __table_args__ = (
+        Index("uq_chat_runs_active_conversation", "conversation_id", unique=True,
+              postgresql_where=text("status IN ('queued','running','waiting_context')")),
+        Index("ix_chat_runs_status_locked", "status", "locked_at"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    user_message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    chat_model_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("chat_models.id", ondelete="CASCADE"), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    owner: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    waiting_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    context_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    model_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tool_rounds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class EmbeddingConfig(Base):

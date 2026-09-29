@@ -1,4 +1,4 @@
-"""Small, dependency-free parser and validator for the internal RAG eval set."""
+﻿"""Small, dependency-free parser and validator for the internal RAG eval set."""
 
 import re
 from dataclasses import dataclass, field
@@ -10,7 +10,6 @@ class EvaluationCase:
     case_id: str
     title: str
     mode: str | None = None
-    knowledge_scope: str | None = None
     solution_language: str | None = None
     problem_id: str | None = None
     query: str | None = None
@@ -119,12 +118,8 @@ def validate_evaluation_set(cases: list[EvaluationCase]) -> list[str]:
     for case in cases:
         if case.mode not in {"normal", "acm_analysis", "acm_solution"}:
             errors.append(f"{case.case_id}: invalid mode")
-        if case.knowledge_scope not in {"none", "all"}:
-            errors.append(f"{case.case_id}: invalid knowledge scope")
         if not case.query and case.case_id != "R16":
             errors.append(f"{case.case_id}: query is required")
-        if case.knowledge_scope == "none" and case.expected_sources:
-            errors.append(f"{case.case_id}: none scope cannot have expected sources")
         if case.mode == "acm_solution" and not case.solution_language:
             errors.append(f"{case.case_id}: acm_solution requires solution_language")
         if case.case_id == "R20" and case.fixture != "source document exists but is not indexed yet":
@@ -143,7 +138,7 @@ def evaluate_retrieval_case(
     and a locator with ``section_path``. This intentionally measures grounding
     evidence, not answer quality or embedding similarity.
     """
-    if case.knowledge_scope == "none":
+    if case.fixture in {"retrieval provider unavailable", "source document exists but is not indexed yet"}:
         return RetrievalEvaluation(case.case_id, top_k_hit=not evidence, together_satisfied=not evidence)
     top = evidence[: max(0, top_k)]
     haystacks: list[str] = []
@@ -209,6 +204,6 @@ def run_offline_evaluation(source_path: str | Path, evaluation_path: str | Path,
     results: list[RetrievalEvaluation] = []
     for case in cases:
         query = case.query or " ".join(value for value in (case.turn_1, case.turn_2) if value)
-        evidence = [] if case.knowledge_scope == "none" or case.fixture == "source document exists but is not indexed yet" else lexical_retrieve(query, chunks, top_k)
+        evidence = [] if case.fixture in {"retrieval provider unavailable", "source document exists but is not indexed yet"} else lexical_retrieve(query, chunks, top_k)
         results.append(evaluate_retrieval_case(case, evidence, top_k))
     return results

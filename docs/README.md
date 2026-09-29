@@ -1,7 +1,15 @@
 ﻿# CodeAtlas 文档索引
 
-项目仍在开发中。先读 [开发基线](development-baseline.md) 了解当前功能和限制，再读 [技术栈与运行架构](technical-stack.md)、[API 契约](api-contract.md) 和 [路线图](roadmap.md)。[仓库首页](../README.md) 提供启动与验证命令。
+- [实现说明：RAG、Agent、临时全文、生命周期与默认参数](agent-rag-architecture.md)
+- [交互模块图](codeatlas-architecture.html)
+- [验收记录](agent-rag-acceptance.md)
+- [API 契约](api-contract.md)
+- [数据模型](data-model.md)
+- [技术栈](technical-stack.md)
+- [开发基线](development-baseline.md)
+- [当前产品范围](product-requirements.md)
+- [页面映射](frontend-screen-map.md)
 
-`product-requirements.md`、`frontend-screen-map.md`、`data-model.md` 和 `superpowers/` 中的文档记录了不同阶段的需求、原型与设计决策，部分描述可能早于当前代码。遇到冲突时，以当前实现和本索引中的维护文档为准；接口字段以运行中的 FastAPI `/docs` 为准。
+`superpowers/` 保留仍适用的长期资料、题库等设计记录。已删除为旧聊天知识库选择与资料关联服务的设计文档。历史 Alembic 文件只用于升级路径。
 
-`rag-evaluation/` 是离线评测材料，不能视为真实模型或检索质量的生产验收结果。
+`rag-evaluation/` 是离线契约与词面基线；此前长期索引验收与 Docker 数据盘记录仍供查阅，不能替代本次运行机制及真实模型质量验收。

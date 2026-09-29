@@ -55,7 +55,7 @@ def _upload_error(status_code: int, code: str, message: str, english: str) -> HT
 
 
 async def owned_document(document_id: uuid.UUID, user_id: uuid.UUID, session: AsyncSession) -> Document:
-    item = await session.scalar(select(Document).where(Document.id == document_id, Document.user_id == user_id, Document.deleted_at.is_(None)))
+    item = await session.scalar(select(Document).where(Document.id == document_id, Document.user_id == user_id, Document.scope == "long_term", Document.deleted_at.is_(None)))
     if not item:
         raise HTTPException(404, "Document not found")
     return item

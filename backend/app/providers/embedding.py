@@ -150,6 +150,20 @@ class UserEmbeddingProvider(EmbeddingProvider):
         config = await self.session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == self.user_id))
         return config
 
+    async def embed_query(self, text: str) -> list[float]:
+        # Chat/tool retry budgets are owned by the runtime, never nested here.
+        settings = get_settings().model_copy(update={"embedding_max_retries": 0})
+        config = await self._config()
+        if config:
+            from ..security.provider_credentials import decrypt_secret
+            key = decrypt_secret(config.api_key_ciphertext, config.api_key_nonce)
+            model = config.model_name or settings.embedding_model
+        else:
+            key, model = settings.dashscope_api_key, settings.embedding_model
+        if not key or not model:
+            raise RuntimeError("embedding provider is not configured")
+        return (await self._embed_batches([text], api_key=key, model=model, settings=settings))[0]
+
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         config = await self._config()
         settings = get_settings()

@@ -1,7 +1,6 @@
 ﻿import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  buildKnowledgePayload,
   createDraftConversation,
   deriveConversationTitle,
   mergeMessagePage,
@@ -30,11 +29,6 @@ test("problem detail links open the requested ACM mode safely", () => {
 
 test("first question derives a bounded conversation title", () => {
   assert.equal(deriveConversationTitle("  Explain Dijkstra's algorithm in detail  "), "Explain Dijkstra's algor…");
-});
-
-test("knowledge scope payload supports only none and all", () => {
-  assert.deepEqual(buildKnowledgePayload("none"), { knowledge_scope: "none" });
-  assert.deepEqual(buildKnowledgePayload("all"), { knowledge_scope: "all" });
 });
 
 test("pinned conversations sort before recent conversations", () => {

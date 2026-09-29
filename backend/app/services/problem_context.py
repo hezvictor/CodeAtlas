@@ -14,7 +14,6 @@ def message_context_metadata(message) -> dict:
     return {
         "problem_id": message.problem_id,
         "mode": message.mode or "normal",
-        "knowledge_scope": message.knowledge_scope or "none",
         "solution_language": message.solution_language,
     }
 

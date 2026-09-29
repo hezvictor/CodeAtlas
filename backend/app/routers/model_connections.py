@@ -24,6 +24,7 @@ from ..providers.url_validation import validate_provider_base_url
 from ..schemas import (
     ChatModelCreate,
     ChatModelResponse,
+    ChatModelUpdate,
     EmbeddingConfigResponse,
     EmbeddingConfigUpdate,
     ModelConnectionCreate,
@@ -78,6 +79,8 @@ def model_response(model: ChatModel, connection: ModelConnection | None = None, 
         verification_error=model.verification_error,
         last_tested_at=model.last_tested_at,
         is_default=is_default,
+        capabilities=model.capabilities or {},
+        context_window_tokens=model.context_window_tokens,
     )
 
 
@@ -135,7 +138,7 @@ async def update_connection(connection_id: uuid.UUID, payload: ModelConnectionUp
         await session.execute(
             update(ChatModel)
             .where(ChatModel.connection_id == connection.id)
-            .values(status="unverified", verification_error="Connection credentials changed", last_tested_at=None)
+            .values(status="unverified", verification_error="Connection credentials changed", last_tested_at=None, capabilities={})
         )
     await session.commit()
     await session.refresh(connection)
@@ -187,7 +190,7 @@ async def add_model(connection_id: uuid.UUID, payload: ChatModelCreate, user_id=
     existing = await session.scalar(select(ChatModel).where(ChatModel.connection_id == connection.id, ChatModel.name == payload.name))
     if existing:
         return model_response(existing, connection)
-    model = ChatModel(connection_id=connection.id, name=payload.name, source="manual")
+    model = ChatModel(connection_id=connection.id, name=payload.name, source="manual", context_window_tokens=payload.context_window_tokens)
     session.add(model)
     await session.commit()
     await session.refresh(model)
@@ -211,13 +214,20 @@ async def test_model(connection_id: uuid.UUID, model_id: uuid.UUID, user_id=Depe
     model, connection = await owned_model(model_id, user_id, session)
     if model.connection_id != connection_id:
         raise HTTPException(404, "Chat model not found")
+    credentials = (connection.base_url, connection.api_key_ciphertext, connection.api_key_nonce)
     try:
         key = decrypt_secret(connection.api_key_ciphertext, connection.api_key_nonce)
         result = await OpenAICompatibleChatProvider(connection.base_url, key).test_model(model.name)
-    except Exception as error:
-        result = type("ProviderResult", (), {"ok": False, "error": str(error)})()
+    except Exception:
+        from ..providers.chat import ProviderTestResult
+        result = ProviderTestResult(False, "连接配置或能力验证暂时不可用", "incomplete")
+    await session.refresh(connection, with_for_update=True)
+    if connection.status != "active" or credentials != (connection.base_url, connection.api_key_ciphertext, connection.api_key_nonce):
+        from ..providers.chat import ProviderTestResult
+        result = ProviderTestResult(False, "检测期间连接已变更，请重新检测", "unverified")
     model.last_tested_at = datetime.now(UTC)
-    model.status = "verified" if result.ok else "invalid"
+    model.status = result.status
+    model.capabilities = result.capabilities
     model.verification_error = None if result.ok else result.error or "Model test failed"
     await session.commit()
     await session.refresh(model)
@@ -227,7 +237,7 @@ async def test_model(connection_id: uuid.UUID, model_id: uuid.UUID, user_id=Depe
 @router.patch("/{connection_id}/models/{model_id}/default", response_model=ChatModelResponse)
 async def set_default_model(connection_id: uuid.UUID, model_id: uuid.UUID, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     model, connection = await owned_model(model_id, user_id, session)
-    if model.connection_id != connection_id or model.status != "verified":
+    if model.connection_id != connection_id or not model_is_chat_ready(model):
         raise HTTPException(409, "Only a verified model can be the default")
     user = await session.get(User, user_id)
     user.default_chat_model_id = model.id
@@ -241,10 +251,29 @@ async def available_models(user_id=Depends(current_user_id), session: AsyncSessi
     rows = await session.execute(
         select(ChatModel, ModelConnection)
         .join(ModelConnection, ChatModel.connection_id == ModelConnection.id)
-        .where(ModelConnection.user_id == user_id, ModelConnection.status == "active", ChatModel.status == "verified")
+        .where(ModelConnection.user_id == user_id, ModelConnection.status == "active", ChatModel.status == "verified",
+               ChatModel.capabilities["tool_calling"].as_string() == "verified",
+               ChatModel.capabilities["chat"].as_string() == "verified",
+               ChatModel.capabilities["tool_result"].as_string() == "verified")
         .order_by(ModelConnection.name, ChatModel.name)
     )
     return [model_response(model, connection, model.id == getattr(user, "default_chat_model_id", None)) for model, connection in rows.all()]
+
+
+def model_is_chat_ready(model: ChatModel) -> bool:
+    capabilities = model.capabilities or {}
+    return model.status == "verified" and all(capabilities.get(key) == "verified" for key in ("chat", "tool_calling", "tool_result"))
+
+
+@router.patch("/{connection_id}/models/{model_id}", response_model=ChatModelResponse)
+async def update_model_capacity(connection_id: uuid.UUID, model_id: uuid.UUID, payload: ChatModelUpdate,
+                                user_id=Depends(current_user_id), session=Depends(get_session)):
+    model, connection = await owned_model(model_id, user_id, session)
+    if model.connection_id != connection_id:
+        raise HTTPException(404, "Chat model not found")
+    model.context_window_tokens = payload.context_window_tokens
+    await session.commit()
+    return model_response(model, connection)
 
 
 def embedding_response(config: EmbeddingConfig | None) -> EmbeddingConfigResponse:
@@ -318,7 +347,7 @@ async def test_embedding_config(user_id=Depends(current_user_id), session: Async
                 select(DocumentJob)
                 .join(DocumentVersion, DocumentJob.document_version_id == DocumentVersion.id)
                 .join(Document, DocumentVersion.document_id == Document.id)
-                .where(Document.user_id == user_id, Document.deleted_at.is_(None), DocumentJob.status == "waiting_embedding", DocumentVersion.extension != ".pdf", DocumentVersion.cleanup_pending.is_(False))
+                .where(Document.user_id == user_id, Document.scope == "long_term", Document.deleted_at.is_(None), DocumentJob.status == "waiting_embedding", DocumentVersion.extension != ".pdf", DocumentVersion.cleanup_pending.is_(False))
             )
         ).all()
         for job in pending_jobs:

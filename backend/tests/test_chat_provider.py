@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 
 import httpx
@@ -44,7 +44,8 @@ def test_openai_compatible_provider_discovers_and_tests_models(monkeypatch):
     candidates, result = asyncio.run(run())
 
     assert [item.name for item in candidates] == ["model-a", "model-b"]
-    assert result.ok is True
+    assert result.ok is False
+    assert result.capabilities["tool_calling"] == "failed"
     assert client.requests[0][1].endswith("/models")
     assert client.requests[1][2]["headers"]["Authorization"] == "Bearer secret"
 

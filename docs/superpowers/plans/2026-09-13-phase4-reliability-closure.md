@@ -1,27 +1,6 @@
-﻿# Phase 4 Reliability Closure Implementation Plan
+﻿# 既有认证与长期存储实施记录
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** Close the existing CodeAtlas Phase 4 workflow by fixing authentication revocation, private retrieval scope, conversation context isolation, attachments, document lifecycle, model-call reliability, deployment configuration, and verification without adding future features.
-
-**Architecture:** Keep FastAPI, SQLAlchemy/Alembic, PostgreSQL/pgvector, Redis/Arq, MinIO, and Next.js. Add durable user authentication versions, conversation-scoped retrieval filters, idempotent storage cleanup metadata, bounded provider retries and budgets, and Redis-backed conversation run leases. Reuse the existing document and attachment APIs while adding only the missing version and UI operations.
-
-**Tech Stack:** Python 3.11, FastAPI, SQLAlchemy 2 async, Alembic, PostgreSQL/pgvector, Redis 7, Arq, MinIO/S3, httpx, PyJWT, Argon2, Next.js 15, React 19, TypeScript.
-
-**Spec:** `docs/superpowers/specs/2026-09-13-phase4-reliability-closure-design.md`
-
-## Global Constraints
-
-- An empty knowledge-group selection and an empty attachment selection mean that retrieval is skipped completely.
-- Retrieval must be limited to the authenticated user, and attachment retrieval must also be limited to the active conversation.
-- Document deletion hides the document immediately and schedules object cleanup; cleanup failures are recorded and retried.
-- Avatar replacement activates the new object before deleting the old object.
-- Existing uncommitted Phase 4 work is preserved; unrelated refactors are excluded.
-- `resume` continues to mean generating from persisted messages, not checkpoint restoration.
-- Existing SSE event names and response contracts remain compatible unless a new field is additive.
-- Online compilation, OJ evaluation, OCR, URL fetching, rerank, image understanding, table-specific parsing, and checkpoint persistence remain out of scope.
-
----
+仅保留与当前重构共享的账号认证、头像及长期资料管理内容，记录并非本次执行指令。当前聊天、工具与临时全文流程见 [实现说明](../../agent-rag-architecture.md)。
 
 ### Task 1: Add Durable Security and Storage State
 
@@ -80,6 +59,7 @@ Expected: PASS.
 git add backend/app/models.py backend/migrations/versions/0008_phase4_reliability_closure.py backend/tests/test_phase4_migration.py
 git commit -m "feat: add Phase 4 security and cleanup state"
 ```
+
 
 ### Task 2: Implement Immediate Access-Token Revocation
 
@@ -144,59 +124,6 @@ git add backend/app/auth.py backend/app/dependencies.py backend/app/routers/auth
 git commit -m "feat: revoke access tokens on logout and password change"
 ```
 
-### Task 3: Enforce Conversation-Scoped Retrieval
-
-**Files:**
-- Modify: `backend/app/services/retrieval_service.py`
-- Modify: `backend/app/routers/conversations.py`
-- Test: `backend/tests/test_retrieval_scope.py`
-- Modify: `backend/tests/test_conversations_runtime.py`
-
-**Interfaces:**
-- `retrieve_chunks(session, user_id, conversation_id, query, group_ids=None, attachment_ids=None, limit=10, embedding_provider=None) -> list[RankedChunk]`.
-- Empty `group_ids` and `attachment_ids` return `[]` before any SQL statement or provider call.
-
-- [ ] **Step 1: Write failing scope tests**
-
-```python
-@pytest.mark.asyncio
-async def test_empty_scope_skips_database_and_embedding():
-    provider = ExplodingProvider()
-    session = ExplodingSession()
-    assert await retrieve_chunks(session, uuid.uuid4(), uuid.uuid4(), "query", embedding_provider=provider) == []
-
-
-def test_attachment_query_contains_conversation_filter():
-    statement = build_attachment_statement(uuid.uuid4(), uuid.uuid4(), [uuid.uuid4()])
-    assert "conversation_id" in str(statement)
-```
-
-- [ ] **Step 2: Run the focused tests and verify they fail**
-
-Run: `pytest backend/tests/test_retrieval_scope.py -q`
-
-Expected: FAIL because the function has no conversation parameter and performs unrestricted retrieval.
-
-- [ ] **Step 3: Add the early-return and ownership filters**
-
-Normalize and deduplicate UUID lists. Return immediately when both lists are empty. Require `Document.user_id`, `deleted_at IS NULL`, and indexed versions. For attachments join `Attachment` and require matching `user_id` and `conversation_id`; keep the document ownership and indexed-status predicates.
-
-- [ ] **Step 4: Pass the active conversation id from the chat route**
-
-Call `retrieve_chunks(session, uid, cid, payload.content, payload.knowledge_group_ids, payload.attachment_ids)`. Preserve the existing `retrieval_requested` behavior so scoped retrieval failures terminate the run and emit `retrieval.failed`/`run.failed` without invoking the model.
-
-- [ ] **Step 5: Run RAG and conversation tests**
-
-Run: `pytest backend/tests/test_retrieval_scope.py backend/tests/test_retrieval_and_citations.py backend/tests/test_chat_rag.py backend/tests/test_conversations_runtime.py -q`
-
-Expected: PASS, including no-scope skip, cross-conversation rejection, and scoped failure behavior.
-
-- [ ] **Step 6: Commit the retrieval boundary**
-
-```powershell
-git add backend/app/services/retrieval_service.py backend/app/routers/conversations.py backend/tests/test_retrieval_scope.py backend/tests/test_conversations_runtime.py
-git commit -m "fix: scope RAG retrieval to selected knowledge and conversation"
-```
 
 ### Task 4: Add Versioned Document Upload and Cleanup Retry
 
@@ -264,6 +191,7 @@ git add backend/app/routers/knowledge_documents.py backend/app/tasks/document_ta
 git commit -m "feat: complete document versions and object cleanup"
 ```
 
+
 ### Task 5: Harden Avatar Upload and Replacement
 
 **Files:**
@@ -316,236 +244,6 @@ git add backend/app/routers/users.py backend/app/storage/s3.py backend/app/confi
 git commit -m "fix: harden avatar uploads and replacement cleanup"
 ```
 
-### Task 6: Add Bounded Embedding Retries and Context Budgets
-
-**Files:**
-- Modify: `backend/app/providers/embedding.py`
-- Modify: `backend/app/services/retrieval_service.py`
-- Modify: `backend/app/routers/conversations.py`
-- Modify: `backend/app/config.py`
-- Create: `backend/app/services/context_budget.py`
-- Test: `backend/tests/test_embedding_retries.py`
-- Test: `backend/tests/test_context_budget.py`
-
-**Interfaces:**
-- `EmbeddingProvider.embed_documents(texts)` retries only transient 429/5xx/network/timeout failures up to `embedding_max_retries`.
-- `trim_history(history, max_chars, max_messages) -> list[dict]` keeps the newest complete messages within budget.
-- `trim_retrieved_chunks(chunks, max_chars, limit) -> list[RankedChunk]` removes duplicate adjacent content and respects the configured budget.
-
-- [ ] **Step 1: Write failing retry and budget tests**
-
-```python
-@pytest.mark.asyncio
-async def test_embedding_retries_429_then_succeeds(monkeypatch):
-    client = FakeHttpClient([429, 200])
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **_: client)
-    assert await EmbeddingProvider().embed_query("q") == [0.1, 0.2]
-    assert client.calls == 2
-
-
-def test_history_budget_keeps_newest_messages_without_partial_records():
-    result = trim_history(history, max_chars=20, max_messages=3)
-    assert len(result) <= 3
-    assert sum(len(item["content"]) for item in result) <= 20
-```
-
-- [ ] **Step 2: Run focused tests and verify they fail**
-
-Run: `pytest backend/tests/test_embedding_retries.py backend/tests/test_context_budget.py -q`
-
-Expected: FAIL because Provider calls once and no shared budget helper exists.
-
-- [ ] **Step 3: Implement transient classification and exponential backoff**
-
-Use explicit connect/read timeout values. Retry 429, 5xx, `httpx.TimeoutException`, and transport errors with `base_delay * 2**attempt`, capped by `embedding_retry_max_delay_seconds`. Raise immediately for other 4xx responses. Log status, attempt, and elapsed milliseconds without logging request content or credentials.
-
-- [ ] **Step 4: Apply deterministic history and RAG budgets**
-
-Load only the newest messages that fit the configured history count/character budget. Apply the RAG budget after retrieval and before prompt construction, preserving ranking order and the current user prompt. Keep citation IDs for retained chunks only.
-
-- [ ] **Step 5: Run chat and worker tests**
-
-Run: `pytest backend/tests/test_embedding_retries.py backend/tests/test_context_budget.py backend/tests/test_chat_rag.py backend/tests/test_conversations_runtime.py backend/tests/test_worker.py -q`
-
-Expected: PASS with bounded retries and stable prompt sizes.
-
-- [ ] **Step 6: Commit model reliability changes**
-
-```powershell
-git add backend/app/providers/embedding.py backend/app/services/retrieval_service.py backend/app/routers/conversations.py backend/app/services/context_budget.py backend/app/config.py backend/tests/test_embedding_retries.py backend/tests/test_context_budget.py
-git commit -m "feat: bound embedding retries and chat context budgets"
-```
-
-### Task 7: Replace Process-Local Run State with Redis Leases
-
-**Files:**
-- Create: `backend/app/services/run_state.py`
-- Modify: `backend/app/routers/conversations.py`
-- Modify: `backend/app/main.py`
-- Modify: `backend/app/config.py`
-- Test: `backend/tests/test_run_state.py`
-- Modify: `backend/tests/test_conversations_runtime.py`
-
-**Interfaces:**
-- `RunState.acquire(conversation_id) -> RunLease` raises HTTP 409 when another live lease exists.
-- `RunLease.stop_requested() -> bool` reads the distributed stop signal.
-- `RunLease.release() -> None` releases only the owner lease and is idempotent.
-- `RunState.request_stop(conversation_id) -> None` writes a short-lived stop key.
-
-- [ ] **Step 1: Write failing Redis lease tests**
-
-```python
-@pytest.mark.asyncio
-async def test_second_instance_cannot_acquire_same_conversation():
-    redis = FakeRedis()
-    first = RunState(redis)
-    second = RunState(redis)
-    lease = await first.acquire("conversation-1")
-    with pytest.raises(HTTPException) as error:
-        await second.acquire("conversation-1")
-    assert error.value.status_code == 409
-    await lease.release()
-```
-
-- [ ] **Step 2: Run focused tests and verify they fail**
-
-Run: `pytest backend/tests/test_run_state.py -q`
-
-Expected: FAIL because Redis run state does not exist.
-
-- [ ] **Step 3: Implement owner-checked Redis lease and stop signal**
-
-Use `redis.asyncio` with `SET NX EX` for acquisition. Store a random owner token, refresh the lease while generating, release with an owner-checking Lua script, and write a stop key with a bounded TTL. Keep an in-memory adapter only for unit tests.
-
-- [ ] **Step 4: Integrate the lease into SSE generation**
-
-Acquire before persisting the user message, use `lease.stop_requested()` alongside disconnect detection, replace `/run/stop` with `request_stop`, and release in the existing `finally` block. Preserve all current SSE event names and failed-message persistence.
-
-- [ ] **Step 5: Add cleanup lifecycle wiring**
-
-Close the Redis client in FastAPI lifespan and keep the existing stale-run cleanup only for test adapters. Do not add checkpoint persistence or change `/run/resume` semantics.
-
-- [ ] **Step 6: Run runtime tests**
-
-Run: `pytest backend/tests/test_run_state.py backend/tests/test_conversations_runtime.py -q`
-
-Expected: PASS for same-instance and simulated multi-instance behavior.
-
-- [ ] **Step 7: Commit the distributed run-state change**
-
-```powershell
-git add backend/app/services/run_state.py backend/app/routers/conversations.py backend/app/main.py backend/app/config.py backend/tests/test_run_state.py backend/tests/test_conversations_runtime.py
-git commit -m "feat: coordinate conversation runs with Redis leases"
-```
-
-### Task 8: Isolate Frontend Conversation Context
-
-**Files:**
-- Modify: `frontend/src/app/chat/page.tsx`
-- Create: `frontend/src/lib/chat-context.ts`
-- Test: `frontend/src/lib/chat-context.test.ts`
-
-**Interfaces:**
-- `emptyConversationContext()` returns mode `normal`, null problem/language, empty citations, no attachments, and reset pagination.
-- `restoreConversationContext(messages)` derives context only from the supplied conversation messages.
-
-- [ ] **Step 1: Write failing pure-state tests**
-
-```typescript
-test("restoring a conversation never uses another conversation's problem", () => {
-  const context = restoreConversationContext([{ problem_id: "b", mode: "acm_analysis", solution_language: null }]);
-  expect(context.problemId).toBe("b");
-  expect(context.mode).toBe("acm_analysis");
-});
-
-test("empty context clears ACM state", () => {
-  expect(emptyConversationContext().mode).toBe("normal");
-  expect(emptyConversationContext().problemId).toBeNull();
-});
-```
-
-- [ ] **Step 2: Run focused frontend tests and verify they fail**
-
-Run: `npm --prefix frontend exec tsx --test src/lib/chat-context.test.ts`
-
-Expected: FAIL because the context helper does not exist.
-
-- [ ] **Step 3: Implement conversation context helpers**
-
-Create pure helpers for reset and restoration. Restoration must use the latest context-bearing message from the supplied list and must not consult global component state.
-
-- [ ] **Step 4: Reset state on active conversation changes**
-
-In `page.tsx`, clear problem, mode, language, citations, attachments, pagination cursor, and loading flags before loading a new conversation. Capture the requested conversation id in each async load and ignore responses for stale ids.
-
-- [ ] **Step 5: Update send/retry paths**
-
-Use only the active conversation's context when building `ChatRequest`. Include `attachment_ids`, preserve retry metadata, and prevent a stale request from updating the current message list.
-
-- [ ] **Step 6: Run TypeScript checks and tests**
-
-Run: `npm --prefix frontend run test:message` and `npm --prefix frontend exec tsc -- --noEmit`
-
-Expected: PASS.
-
-- [ ] **Step 7: Commit the frontend context isolation change**
-
-```powershell
-git add frontend/src/app/chat/page.tsx frontend/src/lib/chat-context.ts frontend/src/lib/chat-context.test.ts
-git commit -m "fix: isolate chat context when switching conversations"
-```
-
-### Task 9: Complete Frontend Chat Attachments
-
-**Files:**
-- Modify: `frontend/src/app/chat/page.tsx`
-- Create: `frontend/src/components/AttachmentPicker.tsx`
-- Modify: `frontend/src/lib/auth.ts`
-- Test: `frontend/src/components/AttachmentPicker.test.tsx`
-
-**Interfaces:**
-- `AttachmentPicker` accepts `conversationId`, `token`, `onChange`, and `disabled` props.
-- It calls `GET /conversations/{id}/attachments`, `POST /conversations/{id}/attachments/{versionId}`, and `DELETE /conversations/{id}/attachments/{attachmentId}`.
-- Chat requests include `attachment_ids` alongside the optional selected group id.
-- Export pure request builders `attachmentListRequest`, `attachRequest`, and `detachRequest`; tests use the repository's existing dependency-free `node:test` runner rather than Vitest.
-- Export pure request builders `attachmentListRequest`, `attachRequest`, and `detachRequest` so the repository's dependency-free `node:test` runner can verify conversation scoping without adding a test framework.
-
-- [ ] **Step 1: Write failing picker contract tests**
-
-```typescript
-test("attachment request builders use the active conversation", () => {
-  assert.match(attachmentListRequest("conversation-b").url, /conversation-b\\/attachments$/);
-  assert.match(attachRequest("conversation-b", "version-1").url, /conversation-b\\/attachments\\/version-1$/);
-  assert.match(detachRequest("conversation-b", "attachment-1").url, /conversation-b\\/attachments\\/attachment-1$/);
-});
-```
-
-- [ ] **Step 2: Run the focused test and verify it fails**
-
-Run: `npm --prefix frontend exec tsx --test src/components/AttachmentPicker.test.tsx`
-
-Expected: FAIL because the component does not exist.
-
-- [ ] **Step 3: Implement attachment listing, mounting, and detaching**
-
-Render current attachments and an indexed-document selector. On attach/detach, refresh the active conversation list and expose the resulting IDs to the parent. Use `apiFetch` so expired access tokens refresh consistently.
-
-- [ ] **Step 4: Wire the composer button and request body**
-
-Replace the no-op attachment button with the picker. Clear attachments on conversation switch and include `attachment_ids` in `messages/stream`. Keep the selected knowledge group independent from attachments.
-
-- [ ] **Step 5: Run frontend build and component tests**
-
-Run: `npm --prefix frontend exec tsx --test src/components/AttachmentPicker.test.tsx` and `npm --prefix frontend run build`
-
-Expected: PASS.
-
-- [ ] **Step 6: Commit the chat attachment flow**
-
-```powershell
-git add frontend/src/app/chat/page.tsx frontend/src/components/AttachmentPicker.tsx frontend/src/components/AttachmentPicker.test.tsx frontend/src/lib/auth.ts
-git commit -m "feat: attach and detach knowledge documents from chat"
-```
 
 ### Task 10: Complete Knowledge Document UI and Version History
 
@@ -597,6 +295,7 @@ Expected: PASS.
 git add frontend/src/app/knowledge/page.tsx frontend/src/app/knowledge/[id]/page.tsx frontend/src/components/DocumentActions.tsx frontend/src/components/DocumentActions.test.tsx
 git commit -m "feat: complete knowledge document lifecycle controls"
 ```
+
 
 ### Task 11: Normalize Compose and Environment Configuration
 
@@ -652,55 +351,4 @@ Expected: PASS with no hard-coded production credentials and no production `loca
 ```powershell
 git add docker-compose.yml frontend/Dockerfile frontend/next.config.ts .env.example backend/app/config.py backend/tests/test_deployment_config.py README.md docs/technical-stack.md
 git commit -m "fix: normalize production deployment configuration"
-```
-
-### Task 12: Execute Integration, Browser, and Documentation Closure
-
-**Files:**
-- Create: `backend/tests/test_integration_phase4.py`
-- Modify: `docs/api-contract.md`
-- Modify: `docs/data-model.md`
-- Modify: `docs/development-baseline.md`
-- Modify: `docs/browser-test-plan.md`
-- Modify: `docs/browser-test-results.md`
-- Modify: `README.md`
-
-**Interfaces:**
-- Integration fixture starts PostgreSQL/pgvector, Redis, MinIO, backend, and Worker with production-style environment variables.
-- Browser matrix covers login/logout, conversation switching, ACM problem selection, knowledge selection, attachment mount/detach, document lifecycle, and mobile layout.
-
-- [ ] **Step 1: Write integration test scenarios**
-
-```python
-@pytest.mark.integration
-async def test_private_attachment_cannot_cross_conversations(real_stack):
-    # Create one user, two conversations, and one indexed document.
-    # Mount the document only in conversation A.
-    # Query conversation B and assert retrieval.completed count is zero.
-    assert await real_stack.retrieval_count(conversation_b) == 0
-```
-
-- [ ] **Step 2: Run the existing backend suite before full-stack changes**
-
-Run: `docker compose --profile test run --rm backend-test`
-
-Expected: the baseline suite passes before integration additions; record the exact count.
-
-- [ ] **Step 3: Run the full real-service integration matrix**
-
-Run: `docker compose up --build -d`, `docker compose --profile test run --rm backend-test`, and the documented browser command against the running frontend. Verify health, readiness, migration head, Worker indexing, MinIO cleanup, Redis lease stop, and all Phase 4 UI flows.
-
-- [ ] **Step 4: Update documentation from observed results**
-
-Record only commands and results that actually ran. Update API contracts for version upload/listing, attachment IDs, token invalidation, and SSE behavior. Update data-model and baseline documents to revision `0008_phase4_reliability_closure`.
-
-- [ ] **Step 5: Perform final regression and review**
-
-Run: `pytest backend/tests -q`, `npm --prefix frontend run build`, `docker compose config`, and the browser matrix. Review `git diff --check`, confirm no future-scope feature was added, and verify all acceptance criteria in the design document have an evidence entry.
-
-- [ ] **Step 6: Commit the verified closure**
-
-```powershell
-git add backend frontend docker-compose.yml .env.example README.md docs
-git commit -m "feat: close Phase 4 reliability and workflow gaps"
 ```

@@ -1,4 +1,4 @@
-# Knowledge Ingestion Lifecycle Implementation Plan
+﻿# Knowledge Ingestion Lifecycle Implementation Plan
 
 > **For agentic workers:** Implement this plan task-by-task in the current session with test-first checkpoints. The user has already authorized inline execution.
 
@@ -42,7 +42,7 @@ Files: `backend/app/tasks/document_tasks.py`, `backend/app/services/document_lif
 - [x] Run lifecycle, queue, embedding and citation tests.
 
 ## Task 4: Upload/conflict/status APIs
-Files: `backend/app/routers/knowledge_documents.py`, `backend/app/routers/model_connections.py`, `backend/app/routers/attachments.py`, `backend/app/storage/s3.py`.
+Files: `backend/app/routers/knowledge_documents.py`, `backend/app/routers/model_connections.py`, `backend/app/storage/s3.py`.
 - [x] Test group-scoped preflight, same-hash skip, explicit conflict decision, timestamp naming, upload idempotency, active preview/download, PDF rejection and summary acknowledgement.
 - [x] Add preflight, summary and acknowledgement endpoints; validate conflicts again at upload under scoped locks.
 - [x] Store originals and durable jobs before response; support independent/new-version actions and keep active pointer unchanged until indexing.

@@ -24,21 +24,6 @@ def test_rrf_merge_populates_combined_score_for_citations():
     assert result[0].score > 0
 
 
-def test_rrf_merge_prefers_session_file_when_relevance_is_tied():
-    from app.retrieval import RankedChunk, rrf_merge
-
-    long_term, session_file = uuid.uuid4(), uuid.uuid4()
-    result = rrf_merge(
-        [
-            RankedChunk(long_term, "long term", 0.0, source_type="long_term"),
-            RankedChunk(session_file, "session", 0.0, source_type="session"),
-        ],
-        [],
-    )
-
-    assert [item.chunk_id for item in result] == [session_file, long_term]
-
-
 def test_rerank_falls_back_to_rrf_when_provider_fails():
     from app.retrieval import RankedChunk, rerank_chunks
 
@@ -83,6 +68,7 @@ async def test_retrieval_provider_failure_is_not_silently_converted_to_keyword_o
             return []
 
     class Session:
+        async def scalar(self, _statement): return True
         async def scalars(self, _statement):
             return EmptyResult()
 
@@ -94,4 +80,4 @@ async def test_retrieval_provider_failure_is_not_silently_converted_to_keyword_o
             raise RuntimeError("embedding provider unavailable")
 
     with pytest.raises(RuntimeError, match="embedding provider unavailable"):
-        await retrieve_chunks(Session(), uuid.uuid4(), uuid.uuid4(), "query", attachment_ids=[uuid.uuid4()], embedding_provider=Provider())
+        await retrieve_chunks(Session(), uuid.uuid4(), "query", embedding_provider=Provider())

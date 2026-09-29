@@ -1,11 +1,8 @@
-﻿export type KnowledgeScope = "none" | "all";
-
-export type ConversationLike = {
+﻿export type ConversationLike = {
   id: string;
   title: string;
   updated_at: string;
   pinned?: boolean;
-  knowledge_scope?: KnowledgeScope;
 };
 
 export type DraftConversation = {
@@ -13,20 +10,15 @@ export type DraftConversation = {
   title: "新对话";
   updated_at: string;
   pinned: false;
-  knowledge_scope: "none";
 };
 
 export function createDraftConversation(): DraftConversation {
-  return { id: null, title: "新对话", updated_at: new Date().toISOString(), pinned: false, knowledge_scope: "none" };
+  return { id: null, title: "新对话", updated_at: new Date().toISOString(), pinned: false };
 }
 
 export function deriveConversationTitle(question: string): string {
   const normalized = question.trim().replace(/\s+/g, " ");
   return normalized.length > 24 ? `${normalized.slice(0, 24)}…` : normalized;
-}
-
-export function buildKnowledgePayload(scope: KnowledgeScope) {
-  return { knowledge_scope: scope };
 }
 
 export function parseChatLaunch(search: string): { problemId: string | null; mode: "normal" | "acm_analysis" | "acm_solution" } {

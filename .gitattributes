@@ -1,1 +1,7 @@
-* text working-tree-encoding=UTF-8
+* text=auto working-tree-encoding=UTF-8
+*.png binary -working-tree-encoding
+*.jpg binary -working-tree-encoding
+*.jpeg binary -working-tree-encoding
+*.webp binary -working-tree-encoding
+docs/codeatlas-architecture*.html text eol=lf
+docs/codeatlas-architecture*.json text eol=lf

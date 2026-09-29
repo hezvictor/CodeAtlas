@@ -325,7 +325,7 @@ Expected: FAIL because the current stream has no problem context event and alway
 
 - [ ] **Step 3: Integrate selected knowledge retrieval**
 
-When groups or attachments are supplied, use the existing retriever with a query composed from the problem title, tags and user content. Keep ordinary retrieval failure semantics unchanged.
+The shared chat runtime builds a retrieval query from the problem title, tags and user content, then always retrieves active long-term knowledge. Retrieval failures are visible and allow reasoning from the problem and other context.
 
 - [ ] **Step 4: Emit compatible events and persist final metadata**
 

@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql+asyncpg://codeatlas:codeatlas-dev-password@localhost:5432/codeatlas"
     redis_url: str = "redis://localhost:6379/0"
+    ephemeral_redis_url: str = "redis://localhost:6380/0"
+    agent_max_tool_rounds: int = 2
+    agent_max_tool_calls: int = 4
+    agent_max_model_calls: int = 4
+    agent_tool_timeout_seconds: int = 15
+    agent_active_timeout_seconds: int = 180
+    agent_checkpoint_retention_seconds: int = 86400
+    agent_context_wait_seconds: int = 604800
     jwt_secret_key: str = "replace-me"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
@@ -66,7 +74,7 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET_KEY must not be empty")
         return value
 
-    @field_validator("embedding_dimensions", "embedding_batch_size", "embedding_max_input_chars", "max_upload_size_bytes", "max_extracted_text_chars", "document_job_max_attempts", "document_job_timeout_seconds", "embedding_max_retries", "chat_history_max_messages", "chat_history_max_chars", "rag_context_max_chars", "avatar_max_size_bytes", "refresh_token_retention_days")
+    @field_validator("agent_max_tool_rounds", "agent_max_tool_calls", "agent_max_model_calls", "agent_tool_timeout_seconds", "agent_active_timeout_seconds", "agent_checkpoint_retention_seconds", "agent_context_wait_seconds", "embedding_dimensions", "embedding_batch_size", "embedding_max_input_chars", "max_upload_size_bytes", "max_extracted_text_chars", "document_job_max_attempts", "document_job_timeout_seconds", "embedding_max_retries", "chat_history_max_messages", "chat_history_max_chars", "rag_context_max_chars", "avatar_max_size_bytes", "refresh_token_retention_days")
     @classmethod
     def validate_positive_limits(cls, value: int, info) -> int:
         if value is None:

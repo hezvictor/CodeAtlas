@@ -1,4 +1,4 @@
-.model-settings-page {
+﻿.model-settings-page {
   max-width: 880px;
 }
 .model-connection-card {
@@ -206,3 +206,4 @@
     max-height: 240px;
   }
 }
+.model-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.model-capacity{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}.model-capacity input{width:160px;padding:5px;border:1px solid var(--line);border-radius:5px}.model-status.incomplete,.model-status.unverified{color:var(--muted)}.model-status.failed,.model-status.unsupported{color:#ad4444}

@@ -1,4 +1,4 @@
-services:
+﻿services:
   backend:
     build: ./backend
     container_name: codeatlas-backend
@@ -7,6 +7,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
       REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
+      EPHEMERAL_REDIS_URL: redis://redis-ephemeral:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set}
       AVATAR_BUCKET: ${AVATAR_BUCKET:-codeatlas-avatars}
@@ -22,6 +23,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      redis-ephemeral: {condition: service_healthy}
       minio: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
@@ -39,6 +41,7 @@ services:
       CODEATLAS_COMPOSE_FILE: /workspace/docker-compose.yml
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
       REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
+      EPHEMERAL_REDIS_URL: redis://redis-ephemeral:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set}
       AVATAR_BUCKET: ${AVATAR_BUCKET:-codeatlas-avatars}
@@ -53,6 +56,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      redis-ephemeral: {condition: service_healthy}
       minio: {condition: service_healthy}
     volumes:
       - .:/workspace:ro
@@ -65,6 +69,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
       REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
+      EPHEMERAL_REDIS_URL: redis://redis-ephemeral:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set}
       S3_REGION: us-east-1
@@ -76,6 +81,7 @@ services:
       backend: {condition: service_healthy}
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      redis-ephemeral: {condition: service_healthy}
       minio: {condition: service_healthy}
   frontend:
     build:
@@ -102,6 +108,12 @@ services:
     expose: ["6379"]
     volumes: [redis_data:/data]
     command: redis-server --appendonly yes
+    healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10}
+  redis-ephemeral:
+    image: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    expose: ["6379"]
+    tmpfs: ["/data"]
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     healthcheck: {test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 10}
   minio:
     build: ./infra/minio

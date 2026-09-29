@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 from datetime import UTC, datetime
 
 import pytest
@@ -25,7 +25,8 @@ async def test_retry_rejects_an_active_generation(monkeypatch):
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[current_user_id] = lambda: uid
-    monkeypatch.setattr(module.runs, "is_running", lambda _cid: True)
+    async def is_active(*args): return True
+    monkeypatch.setattr(module, "active_run", is_active)
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -63,7 +64,8 @@ async def test_retry_rejects_older_assistant_message(monkeypatch):
 
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[current_user_id] = lambda: uid
-    monkeypatch.setattr(module.runs, "is_running", lambda _cid: False)
+    async def is_active(*args): return None
+    monkeypatch.setattr(module, "active_run", is_active)
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

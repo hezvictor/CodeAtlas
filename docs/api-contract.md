@@ -1,32 +1,38 @@
 ﻿# CodeAtlas API 契约
 
-更新：2026-09-28。API 前缀为 `/api/v1`。除注册、登录、刷新外，业务接口使用 Bearer access token；资源查询按当前用户过滤。精确请求体、响应字段和状态码以运行中的 FastAPI `/docs` 为准。
+更新：2026-09-29。前缀 `/api/v1`，资源查询按当前用户过滤。精确 schema 以 FastAPI `/docs` 为准。
 
-| 资源 | 已实现操作 |
-|---|---|
-| `/auth` | 注册、登录、刷新、登出 |
-| `/users/me` | 查询/更新资料、修改密码、上传头像 |
-| `/dashboard` | 首页会话统计 |
-| `/problems` | 用户题目分页列表、创建、详情、更新、删除 |
-| `/model-connections` | 连接增删改查、模型发现/新增/验证/设默认、可用模型列表、Embedding 与 Reranker 配置/验证 |
-| `/conversations` | 列表、创建、详情、重命名/置顶、删除、批量置顶/取消置顶/删除 |
-| `/knowledge/groups` | 分组列表、创建、更新、删除 |
-| `/knowledge/documents` | 上传策略、列表/上传、详情、版本列表/上传、状态、预览、下载、软删除、重试、重建索引 |
+账号、用户资料、首页、私人题库、模型连接、会话管理、知识库分组与长期文档接口继续保留。
 
-## 聊天与附件
+## 聊天、运行与临时全文
 
-- `GET /conversations/{id}/messages?limit=30&before=<ISO 日期>` 返回 `{items, has_more, next_before}`；`limit` 限制在 1–100。
-- `POST /conversations/{id}/messages/stream` 返回 SSE。请求包含 `content`、`mode`、`chat_model_id`、`knowledge_scope`、`problem_id`、`solution_language`、`attachment_ids`，重试可使用 `reuse_last_user=true`。`knowledge_scope` 仅允许 `none` 或 `all`。ACM 分析要求题目；ACM 解题还要求 `cpp`、`java` 或 `python` 语言。
-- `POST /conversations/{id}/messages/{message_id}/retry` 可编辑用户消息并删除之后的历史，或删除最新一条助手消息供重新生成；运行中返回 409。该接口仅准备历史，随后仍需调用消息流接口发起生成。
-- `GET /conversations/{id}/runs/active` 查询当前进程持有的运行快照；`GET /conversations/{id}/runs/{run_id}/stream` 订阅该运行；`POST /conversations/{id}/run/stop` 请求停止；`POST /conversations/{id}/run/resume` 返回可发送后续请求的状态，不恢复原流。
-- `GET /conversations/{id}/messages/{message_id}/citations` 返回已验证引用及文档元数据。
-- `GET /conversations/{id}/attachments` 列出关联；`POST /conversations/{id}/attachments/upload` 上传会话临时文件；`POST /conversations/{id}/attachments/{document_version_id}` 关联已索引文档版本；`DELETE /conversations/{id}/attachments/{attachment_id}` 移除关联。
+- `POST /conversations/{id}/messages/stream`：请求 `content`、`mode`、`chat_model_id`、可选 `problem_id`、`solution_language`、重试 `reuse_last_user`。普通/ACM 共用运行；可粘贴题面，解题必须指定 cpp/java/python。旧范围与资料关联字段不接受，额外字段返回422。
+- `GET /conversations/{id}/messages?limit=30&before=<ISO日期>`：分页 `{items,has_more,next_before}`。
+- `POST /conversations/{id}/messages/{message_id}/retry`：准备编辑重试或重新生成历史，再调用消息流；活跃运行409，临时内容持久化限制在修改前检查。
+- `GET /conversations/{id}/runs/active`：共享数据库中的活跃运行快照或 null。
+- `GET /conversations/{id}/runs/{run_id}/stream`：订阅原运行，先快照再安全过程事件，跨实例工作。
+- `POST /conversations/{id}/run/stop`：持久取消状态并取消模型请求；不保存半成品。
+- `POST /conversations/{id}/run/resume`：仅 waiting_context 可用，先补传文件，再恢复同一 run ID，保留预算并重建依赖推理。
+- `GET /conversations/{id}/messages/{message_id}/citations`：本次实际证据支持的引用及必要历史来源。
+- `GET /conversations/{id}/temporary-files`：当前会话非持久缓存的公开临时元数据，不返回全文。
+- `POST /conversations/{id}/temporary-files`：raw body，`X-File-Name=encodeURIComponent(filename)`；内存解析后只进独立非持久缓存，201表示全文就绪；无文档/版本/索引记录。
+- `DELETE /conversations/{id}/temporary-files/{file_id}`：清除缓存；运行中禁止修改，waiting_context允许补传/移除。
 
-SSE 主要事件为 `run.snapshot`、`run.started`、`retrieval.completed`（状态为 `not_requested`、`no_hit`、`ok` 或 `failed`）、`run.first_token`、`message.delta`、`citations.validated`、`message.final` 和 `run.completed` / `run.interrupted` / `run.failed`。已完成运行的重连先给完整快照，再重放非增量事件，不重放 token 增量。事件记录只保存在持有该运行的后端进程内，且会过期清理。
+旧聊天资料关联接口已移除，不提供兼容。临时文件格式不含 PDF/OCR；DOCX 无法解读的嵌入对象、公式和图片明确拒绝。
 
-普通 HTTP 错误使用 `{code, message, details}`，请求校验失败返回 422。`run.failed` 是 SSE 事件，HTTP 可能已经返回 200；前端需同时处理传输错误和流内失败。
+## 实时事件
 
-当前没有在线评测、编译执行或 checkpoint 恢复接口。
+`run.snapshot`、`run.started`、`retrieval.started/completed`、`model.started/retrying/completed`、`tool.started/retrying/completed`、`citations.validated`、`message.final`、`run.waiting/completed/interrupted/failed`。事件包含安全标题、状态、条数、步骤标识与单调序号；不含原始参数、工具正文或隐藏思维链。
+
+初次检索状态为 no_hit/ok/failed。最终正文先缓冲校验再返回，不推送未校验 token。事件最多128条/24小时；最终消息和状态可从数据库恢复。断线不重新发送问题；重连订阅同一运行并按序号去重。等待补传及终态结束当前订阅。
+
+HTTP 错误使用现有 `{code,message,details}`；SSE失败需从流事件处理，HTTP可能已200。容量未知/不足、输出隐私限制与预算超限都有明确安全错误码。
+
+## 模型配置
+
+模型测试依次验证基础聊天、原生工具调用、随机结果回传，记录 `capabilities` 的 chat/tool_calling/tool_result。三项全部 verified 才能设默认或进入 available 列表。连接凭证变化清除验证；检测期间修改连接不能提交旧结果。
+
+`PATCH /model-connections/{connection_id}/models/{model_id}` 可修改 `context_window_tokens`，按服务商规格填写；null 表示未知。测试不自动推断容量。网络/限流的 incomplete 与明确 unsupported 区分，失败均不自动切换模型。
 
 ## 文档生命周期（2026-09-28）
 

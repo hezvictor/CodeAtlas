@@ -7,7 +7,7 @@ from sqlalchemy import func, select, update
 from ..chunking import chunk_document
 from ..config import get_settings
 from ..db import session_factory
-from ..models import DocumentChunk, DocumentJob, DocumentVersion, EmbeddingConfig
+from ..models import Document, DocumentChunk, DocumentJob, DocumentVersion, EmbeddingConfig
 from ..parsers import parse_document
 from ..providers.embedding import (
     UserEmbeddingProvider,
@@ -27,7 +27,7 @@ class JobCancelled(Exception):
 async def _checkpoint(session, document_id, job_id, lease):
     document = await lock_document(session, document_id)
     job = await session.scalar(select(DocumentJob).where(DocumentJob.id == job_id).with_for_update().execution_options(populate_existing=True))
-    if not document or document.deleted_at or not job or job.status != "running" or job.locked_by != lease:
+    if not document or document.scope != "long_term" or document.deleted_at or not job or job.status != "running" or job.locked_by != lease:
         raise JobCancelled()
     job.locked_at = datetime.now(UTC)
     return document, job
@@ -43,7 +43,7 @@ async def cleanup_deleted_document_objects(_ctx=None) -> int:
     """Purge superseded/deleted content with durable, idempotent retries."""
     cleaned = 0
     async with session_factory() as session:
-        ids = (await session.scalars(select(DocumentVersion.id).where(DocumentVersion.cleanup_pending.is_(True)).order_by(DocumentVersion.storage_delete_attempts, DocumentVersion.created_at).limit(100))).all()
+        ids = (await session.scalars(select(DocumentVersion.id).join(Document, DocumentVersion.document_id == Document.id).where(Document.scope == "long_term", DocumentVersion.cleanup_pending.is_(True)).order_by(DocumentVersion.storage_delete_attempts, DocumentVersion.created_at).limit(100))).all()
     for version_id in ids:
         async with session_factory() as session:
             version = await session.get(DocumentVersion, version_id)
@@ -97,7 +97,7 @@ async def process_document(_ctx, job_id: str) -> dict:
             return {"status": "missing", "job_id": job_id}
         document = await lock_document(session, version.document_id)
         await session.refresh(job, with_for_update=True)
-        if not document or document.deleted_at:
+        if not document or document.scope != "long_term" or document.deleted_at:
             job.status = "cancelled"
             await session.commit()
             return {"status": "cancelled", "job_id": job_id}

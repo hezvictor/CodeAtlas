@@ -1,0 +1,18 @@
+﻿services:
+  postgres:
+    image: pgvector/pgvector@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    environment:
+      POSTGRES_USER: agent_test
+      POSTGRES_PASSWORD: isolated-test-only
+      POSTGRES_DB: codeatlas_agent_test
+    ports: ["127.0.0.1:55439:5432"]
+    tmpfs: ["/var/lib/postgresql/data"]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U agent_test -d codeatlas_agent_test"], interval: 2s, timeout: 3s, retries: 20}
+  redis:
+    image: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    ports: ["127.0.0.1:56379:6379"]
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+  ephemeral:
+    image: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    ports: ["127.0.0.1:56380:6379"]
+    command: ["redis-server", "--appendonly", "no", "--save", "", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]

@@ -1,5 +1,4 @@
-﻿import asyncio
-import logging
+﻿import logging
 import uuid
 from contextlib import asynccontextmanager
 
@@ -13,7 +12,6 @@ from sqlalchemy import text
 from .config import get_settings, validate_embedding_dimension
 from .db import engine
 from .logging_config import configure_logging, request_id
-from .routers.attachments import router as attachments_router
 from .routers.auth import router as auth_router
 from .routers.conversations import router as conversations_router
 from .routers.dashboard import router as dashboard_router
@@ -22,17 +20,12 @@ from .routers.knowledge_groups import router as knowledge_groups_router
 from .routers.model_connections import router as model_connections_router
 from .routers.model_connections import utility_router as model_utility_router
 from .routers.problems import router as problems_router
+from .routers.temporary_files import router as temporary_files_router
 from .routers.users import router as users_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
-
-
-async def _cleanup_runs(registry):
-    while True:
-        await asyncio.sleep(60)
-        await registry.cleanup()
 
 
 async def _validate_embedding_database() -> None:
@@ -54,21 +47,17 @@ async def _validate_embedding_database() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    from redis.asyncio import from_url
-
-    from .routers.conversations import configure_run_state, runs
+async def lifespan(application: FastAPI):
+    from .chat_runtime.infrastructure import RuntimeResources
     await _validate_embedding_database()
-    redis_client = from_url(settings.redis_url, decode_responses=True)
-    configure_run_state(redis_client)
-    cleanup_task = asyncio.create_task(_cleanup_runs(runs))
+    runtime = RuntimeResources()
+    application.state.runtime = runtime
     logger.info("CodeAtlas backend starting in %s environment", settings.app_env)
     try:
+        await runtime.open()
         yield
     finally:
-        cleanup_task.cancel()
-        await asyncio.gather(cleanup_task, return_exceptions=True)
-        await redis_client.aclose()
+        await runtime.close()
         logger.info("CodeAtlas backend stopped")
 
 
@@ -104,10 +93,10 @@ async def request_logging(request, call_next):
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")
+app.include_router(temporary_files_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(knowledge_groups_router, prefix="/api/v1")
 app.include_router(knowledge_documents_router, prefix="/api/v1")
-app.include_router(attachments_router, prefix="/api/v1")
 app.include_router(model_utility_router, prefix="/api/v1")
 app.include_router(model_connections_router, prefix="/api/v1")
 app.include_router(problems_router, prefix="/api/v1")

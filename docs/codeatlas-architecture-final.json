@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CodeAtlas：资料与聊天运行",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "聊天与知识库页面",
+      "sublabel": "题库、模型配置、工具进度",
+      "pos": [
+        40,
+        280
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI",
+      "sublabel": "鉴权、会话与运行准入",
+      "pos": [
+        380,
+        280
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "运行调度 / Arq",
+      "sublabel": "Redis 仅保存任务 ID",
+      "pos": [
+        720,
+        280
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "聊天 Worker",
+      "sublabel": "LangGraph 单 Agent",
+      "pos": [
+        1060,
+        280
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "ephemeral",
+      "type": "database",
+      "label": "独立非持久 Redis",
+      "sublabel": "临时全文、模型上下文、事件",
+      "pos": [
+        380,
+        80
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "pg",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "消息、任务、检查点与知识索引",
+      "pos": [
+        720,
+        80
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "已验证聊天模型",
+      "sublabel": "原生工具调用与结果回传",
+      "pos": [
+        1060,
+        80
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "objects",
+      "type": "cloud",
+      "label": "MinIO 长期资料",
+      "sublabel": "长期原始文件对象",
+      "pos": [
+        380,
+        500
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "ingest",
+      "type": "backend",
+      "label": "资料处理 Worker",
+      "sublabel": "解析、分块、嵌入、索引",
+      "pos": [
+        720,
+        500
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "retrieval",
+      "type": "backend",
+      "label": "长期知识检索服务",
+      "sublabel": "首次固定检索、两个只读工具",
+      "pos": [
+        1060,
+        500
+      ],
+      "size": [
+        200,
+        80
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "web-api",
+      "from": "ui",
+      "to": "api",
+      "label": "HTTP / SSE"
+    },
+    {
+      "id": "run-outbox",
+      "from": "api",
+      "to": "queue",
+      "label": "运行 ID"
+    },
+    {
+      "id": "queue-work",
+      "from": "queue",
+      "to": "worker",
+      "label": "派发任务"
+    },
+    {
+      "id": "api-cache",
+      "from": "api",
+      "to": "ephemeral",
+      "label": "临时全文"
+    },
+    {
+      "id": "worker-pg",
+      "from": "queue",
+      "to": "pg",
+      "label": "调度状态"
+    },
+    {
+      "id": "worker-llm",
+      "from": "worker",
+      "to": "llm",
+      "label": "模型请求"
+    },
+    {
+      "id": "api-long",
+      "from": "api",
+      "to": "objects",
+      "label": "长期上传",
+      "labelDy": 24
+    },
+    {
+      "id": "objects-ingest",
+      "from": "objects",
+      "to": "ingest",
+      "label": "加载原件"
+    },
+    {
+      "id": "index-retrieve",
+      "from": "ingest",
+      "to": "retrieval",
+      "label": "索引可用"
+    },
+    {
+      "id": "worker-retrieve",
+      "from": "worker",
+      "to": "retrieval",
+      "label": "查询证据",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "长期资料",
+      "items": [
+        "文件原件与索引持久保存",
+        "版本完整提交后才参与检索"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "临时资料",
+      "items": [
+        "全文进入当前会话上下文",
+        "空闲24小时、最长72小时；不建立索引"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "运行恢复",
+      "items": [
+        "运行归属与预算由数据库控制",
+        "缓存丢失需重新上传；保留同一运行 ID"
+      ]
+    }
+  ]
+}

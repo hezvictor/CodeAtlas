@@ -1,34 +1,26 @@
 ﻿# CodeAtlas 数据模型
 
-更新：2026-09-23。当前数据库为 PostgreSQL + pgvector，ID 使用 UUID，时间字段使用 UTC。以下是概要，精确字段和约束以 `backend/app/models.py` 及 Alembic 迁移为准。
+更新：2026-09-29。精确字段、索引和外键以 `backend/app/models.py` 与 Alembic 为准。ID 使用 UUID，时间使用 UTC。
 
-## 已实现表
+| 数据 | 持久位置与用途 |
+|---|---|
+| users / refresh_tokens | 账号、资料、令牌与默认模型 |
+| problems | 用户拥有的题面；注册时复制默认题目；删除题目不会删除历史消息 |
+| conversations / messages | 会话、模式、合规用户输入、通过校验的最终回答；停止不保存未校验半成品 |
+| model_connections / chat_models | 加密凭证、模型名、三项能力结果与可选上下文容量 |
+| embedding_configs / reranker_configs | 用户检索模型配置 |
+| knowledge_groups / documents / document_versions | 长期资料组织、版本、有效索引 generation、处理与删除状态 |
+| document_chunks | 长期正文分块、位置、pgvector 向量、全文检索字段 |
+| document_jobs | 长期后台任务、阶段、进度、有限重试、租约与错误 |
+| citations | 已验证长期引用的必要快照 |
+| chat_runs | 后台聊天状态、消息/模型关联、归属租约、预算计数、累计活跃时间、事件序号及安全错误码 |
+| checkpoints 等 LangGraph 表 | 仅控制标记与计数；不包含模型输入、工具参数或结果 |
+| legacy_chat_associations | 迁移保留的旧关联归档；没有活动 ORM 或业务接口 |
 
-| 表 | 关键字段 | 用途 |
-|---|---|---|
-| `users` | `id`, `email`, `password_hash`, `nickname`, `avatar_url` | 用户资料 |
-| `refresh_tokens` | `id`, `user_id`, `token_hash`, `expires_at`, `revoked_at` | refresh token |
-| `conversations` | `id`, `user_id`, `title`, `mode`, `created_at`, `updated_at` | 会话 |
-| `messages` | `id`, `conversation_id`, `role`, `content`, `status`, `model`, `duration_ms`, `first_token_latency_ms` | 消息与模型耗时 |
-| `problems` | `owner_user_id`, `source_type`, `slug`, `statement` | 用户题目与注册模板 |
-| `model_connections`, `chat_models` | `user_id`, 加密模型凭证、验证状态 | 用户聊天模型配置 |
-| `embedding_configs`, `reranker_configs` | `user_id`, 加密凭证、验证状态 | 用户检索模型配置 |
+聊天请求与模型不接受旧知识库范围或关联字段。同一会话只有一个 queued/running/waiting_context 运行，数据库部分唯一索引与归属条件负责并发控制。
 
-助手被停止时已生成内容会以 `cancelled` 状态保存。本项目记录模型耗时和首 token 延迟，不记录模型 token 用量统计。
+临时文件全文、文件名和文件 ID 只放独立非持久 Redis；不进入上述长期文档表、消息元数据、队列或检查点。消息最终答案允许受限摘录与学习结论，保存前执行全文、元数据和引用比例检查。
 
-## 约束
+旧会话文档与索引保留但不参与新检索；`documents.scope` 仅用于区分有效长期资料与历史归档，不能重新作为聊天选择开关。历史迁移保留升级路径；用户原件和历史资料不自动清理。
 
-- 邮箱唯一，应用层按小写处理。
-- 会话和消息查询强制带当前用户条件。
-- 会话按更新时间倒序，消息按创建时间正序。
-- 会话的 `mode` 字段保留兼容性；实际模式记录在每条消息上，支持 `normal`、`acm_analysis` 和 `acm_solution`。
-
-## 已实现知识库模型
-
-`knowledge_groups`、`documents`、`document_versions`、`document_chunks`、`attachments`、`citations` 和 `document_jobs` 已通过 `0004_knowledge_rag` 迁移创建。`0006_job_reliability` 为 `document_jobs` 增加投递尝试和错误记录，并限制同一版本只能有一个 `queued`/`running` 任务。`0010_knowledge_scope_and_model_config` 允许文档无分组；`0014_group_delete_set_null` 把删分组时的文档外键行为改为 `SET NULL`，保留文档。`document_chunks.embedding` 的 pgvector 维度必须与 `EMBEDDING_DIMENSIONS` 一致，应用启动时会校验；`search_vector` 使用 PostgreSQL 全文索引。文档版本状态为 `uploaded`、`parsing`、`chunking`、`embedding`、`indexed` 或 `failed`。
-
-## 题目模型
-
-`problems` 已通过 Phase 4 迁移加入。系统题目使用空 `owner_user_id` 作为注册模板；注册时复制为当前用户拥有的 `source_type=default` 题目，用户新建题目使用 `source_type=user`。题目 ID 使用 UUID，用户只能管理自己的题目。`messages.problem_id` 使用 `ON DELETE SET NULL`，删除题目不会破坏历史消息。
-
-本阶段不引入 LangGraph checkpoints；checkpoint 属于后续单独阶段。
+数据期限、删除流程与失败恢复见 [实现说明](agent-rag-architecture.md)。

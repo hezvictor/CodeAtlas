@@ -1,4 +1,4 @@
-"""PostgreSQL integration tests; each test owns a disposable schema.
+﻿"""PostgreSQL integration tests; each test owns a disposable schema.
 
 Run with RUN_LIFECYCLE_INTEGRATION=1 in the backend-test compose service.
 Only storage and provider HTTP boundaries are replaced; transactions are real.
@@ -238,7 +238,7 @@ async def test_reindex_staging_is_invisible_until_activation(db, monkeypatch):
             from app.services.retrieval_service import retrieve_chunks
             async with factory() as session:
                 old_chunk_ids = set((await session.scalars(select(DocumentChunk.id).where(DocumentChunk.index_job_id == job_id))).all())
-                hits = await retrieve_chunks(session, user_id, uuid4(), "Algorithms", embedding_provider=QueryProvider())
+                hits = await retrieve_chunks(session, user_id, "Algorithms", embedding_provider=QueryProvider())
                 assert hits and all(hit.chunk_id in old_chunk_ids for hit in hits)
                 assert (await session.get(DocumentVersion, version_id)).status == "indexed"
                 assert (await session.get(DocumentJob, retry_id)).total_chunks > 0

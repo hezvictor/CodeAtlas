@@ -1,124 +1,57 @@
-from uuid import UUID
+﻿from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Attachment, Document, DocumentChunk, DocumentVersion
+from ..models import Document, DocumentChunk, DocumentVersion
 from ..providers.embedding import EmbeddingProvider
 from ..retrieval import RankedChunk, assemble_neighbor_context, rerank_chunks_async, rrf_merge
 
 
-def build_attachment_statement(
-    user_id: UUID, conversation_id: UUID, attachment_ids: list[UUID]
-):
-    return select(Attachment.document_version_id).where(
-        Attachment.id.in_(attachment_ids),
-        Attachment.user_id == user_id,
-        Attachment.conversation_id == conversation_id,
+def authorized_chunks(user_id):
+    return select(DocumentChunk).join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id).join(Document, DocumentVersion.document_id == Document.id).where(
+        Document.user_id == user_id, Document.scope == "long_term", Document.deleted_at.is_(None),
+        DocumentVersion.status == "indexed", Document.current_version_id == DocumentVersion.id,
+        DocumentChunk.index_job_id.is_not_distinct_from(DocumentVersion.active_index_job_id),
     )
 
 
-async def retrieve_chunks(
-    session: AsyncSession,
-    user_id: UUID,
-    conversation_id: UUID,
-    query: str,
-    attachment_ids: list[UUID] | None = None,
-    limit: int = 10,
-    embedding_provider: EmbeddingProvider | None = None,
-    knowledge_scope: str | None = None,
-    queries: list[str] | None = None,
-    reranker=None,
-) -> list[RankedChunk]:
-    attachment_ids = list(dict.fromkeys(attachment_ids or []))
-    scope = knowledge_scope or "all"
-    if scope not in {"none", "all"}:
-        raise ValueError("knowledge_scope must be one of: none, all")
-    if scope == "none":
+def ranked(row):
+    return RankedChunk(row.id, row.content, 0.0, row.locator, "knowledge", row.document_version_id, row.ordinal)
+
+
+async def read_context(session, user_id, evidence_id, radius=1):
+    anchor = await session.scalar(authorized_chunks(user_id).where(DocumentChunk.id == UUID(evidence_id)))
+    if not anchor:
         return []
-    if not attachment_ids:
-        attachment_ids = list(
-            (await session.scalars(
-                select(Attachment.id).where(
-                    Attachment.user_id == user_id,
-                    Attachment.conversation_id == conversation_id,
-                )
-            )).all()
-        )
-    filters = [Document.user_id == user_id, Document.deleted_at.is_(None), DocumentVersion.status == "indexed", Document.current_version_id == DocumentVersion.id, DocumentChunk.index_job_id.is_not_distinct_from(DocumentVersion.active_index_job_id)]
-    scope_filters = []
-    if scope == "all":
-        scope_filters.append(Document.scope == "long_term")
-    if attachment_ids:
-        scope_filters.append(
-            DocumentVersion.id.in_(
-                build_attachment_statement(user_id, conversation_id, attachment_ids)
-            )
-        )
-    if scope_filters:
-        filters.append(or_(*scope_filters))
-    search_queries = list(dict.fromkeys([query, *(queries or [])]))
-    keyword: list[RankedChunk] = []
-    vector: list[RankedChunk] = []
+    neighbors = list((await session.scalars(authorized_chunks(user_id).where(
+        DocumentChunk.document_version_id == anchor.document_version_id,
+        DocumentChunk.ordinal.between(max(0, anchor.ordinal - radius), anchor.ordinal + radius),
+    ).order_by(DocumentChunk.ordinal))).all())
+    result = ranked(anchor)
+    result.context_content = assemble_neighbor_context(result, [ranked(row) for row in neighbors])
+    return [result]
+
+
+async def retrieve_chunks(session: AsyncSession, user_id: UUID, query: str, limit=10,
+                          embedding_provider=None, queries=None, reranker=None):
+    if not await session.scalar(authorized_chunks(user_id).limit(1)):
+        return []
+    keyword, vector = [], []
     provider = embedding_provider or EmbeddingProvider()
-    for search_query in search_queries:
-        keyword_rows = (await session.execute(
-            select(DocumentChunk, Document.scope).join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id).join(Document, DocumentVersion.document_id == Document.id)
-            .where(*filters, DocumentChunk.search_vector.op("@@")(func.plainto_tsquery("simple", search_query)))
-            .order_by(func.ts_rank(DocumentChunk.search_vector, func.plainto_tsquery("simple", search_query)).desc())
-            .limit(limit * 2)
-        )).all()
-        keyword.extend(
-            RankedChunk(
-                row.id, row.content, 0.0, row.locator,
-                "session" if source_scope == "session" else "knowledge",
-                row.document_version_id, row.ordinal,
-            )
-            for row, source_scope in keyword_rows
-        )
+    for search_query in list(dict.fromkeys([query, *(queries or [])]))[:3]:
+        tsquery = func.plainto_tsquery("simple", search_query)
+        rows = (await session.scalars(authorized_chunks(user_id).where(
+            DocumentChunk.search_vector.op("@@")(tsquery)
+        ).order_by(func.ts_rank(DocumentChunk.search_vector, tsquery).desc()).limit(limit * 2))).all()
+        keyword.extend(ranked(row) for row in rows)
         query_vector = await provider.embed_query(search_query)
-        vector_rows = (await session.execute(
-            select(DocumentChunk, Document.scope).join(DocumentVersion, DocumentChunk.document_version_id == DocumentVersion.id).join(Document, DocumentVersion.document_id == Document.id)
-            .where(*filters, DocumentChunk.embedding.is_not(None))
-            .order_by(DocumentChunk.embedding.cosine_distance(query_vector))
-            .limit(limit * 2)
-        )).all()
-        vector.extend(
-            RankedChunk(
-                row.id, row.content, 0.0, row.locator,
-                "session" if source_scope == "session" else "knowledge",
-                row.document_version_id, row.ordinal,
-            )
-            for row, source_scope in vector_rows
-        )
-    merged = rrf_merge(keyword, vector, limit=min(limit * 2, 20))
-    selected = (await rerank_chunks_async(query, merged, reranker))[:limit]
-    if not selected:
-        return []
-    version_ids = {item.document_version_id for item in selected if item.document_version_id}
-    if not version_ids:
-        return selected
+        rows = (await session.scalars(authorized_chunks(user_id).where(DocumentChunk.embedding.is_not(None))
+                                    .order_by(DocumentChunk.embedding.cosine_distance(query_vector)).limit(limit * 2))).all()
+        vector.extend(ranked(row) for row in rows)
+    selected = (await rerank_chunks_async(query, rrf_merge(keyword, vector, min(limit * 2, 20)), reranker))[:limit]
     for item in selected:
-        if item.document_version_id is None or item.ordinal is None:
-            continue
-        neighbors = (await session.scalars(
-            select(DocumentChunk)
-            .where(
-                DocumentChunk.document_version_id == item.document_version_id,
-                DocumentChunk.index_job_id.is_not_distinct_from(select(DocumentVersion.active_index_job_id).where(DocumentVersion.id == item.document_version_id).scalar_subquery()),
-                DocumentChunk.ordinal.between(max(0, item.ordinal - 1), item.ordinal + 1),
-                DocumentChunk.id != item.chunk_id,
-            )
-            .order_by(DocumentChunk.ordinal)
-        )).all()
-        item.context_content = assemble_neighbor_context(
-            item,
-            [
-                RankedChunk(
-                    row.id, row.content, 0.0, row.locator,
-                    item.source_type, row.document_version_id, row.ordinal,
-                )
-                for row in neighbors
-            ],
-        )
+        neighbors = await read_context(session, user_id, str(item.chunk_id))
+        if neighbors:
+            item.context_content = neighbors[0].prompt_content
     return selected

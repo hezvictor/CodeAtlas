@@ -13,12 +13,12 @@ def test_internal_rag_evaluation_set_contains_twenty_valid_cases():
     assert [case.case_id for case in cases] == [f"R{index:02d}" for index in range(1, 21)]
 
 
-def test_evaluation_contract_covers_disabled_pending_and_acm_constraints():
+def test_evaluation_contract_covers_failure_pending_and_acm_constraints():
     from app.evaluation import load_evaluation_cases
 
     cases = {case.case_id: case for case in load_evaluation_cases(EVALUATION_FILE)}
 
-    assert cases["R19"].knowledge_scope == "none"
+    assert cases["R19"].fixture == "retrieval provider unavailable"
     assert cases["R19"].citation_required is False
     assert cases["R20"].fixture == "source document exists but is not indexed yet"
     assert cases["R14"].mode == "acm_solution"
@@ -27,7 +27,7 @@ def test_evaluation_contract_covers_disabled_pending_and_acm_constraints():
     assert "complete submit-ready program" in cases["R02"].forbidden
 
 
-def test_evaluation_result_checks_expected_sections_and_disabled_scope():
+def test_evaluation_result_checks_expected_sections_and_unavailable_source():
     from app.evaluation import evaluate_retrieval_case, load_evaluation_cases
 
     cases = {case.case_id: case for case in load_evaluation_cases(EVALUATION_FILE)}

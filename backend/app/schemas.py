@@ -61,9 +61,9 @@ class TokenResponse(BaseModel):
     user: UserResponse
 
 class ConversationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str = Field(default="新对话", min_length=1, max_length=200)
-    mode: str = Field(default="normal", pattern="^normal$")
-    knowledge_scope: Literal["none", "all"] = "none"
+    mode: str = Field(default="normal", pattern="^(normal|acm_analysis|acm_solution)$")
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     pinned: bool | None = None
@@ -85,7 +85,7 @@ class BulkConversationRequest(BaseModel):
 
 class ConversationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; knowledge_scope: Literal["none", "all"]; pinned: bool; selected_chat_model_id: uuid.UUID | None = None; created_at: datetime; updated_at: datetime
+    id: uuid.UUID; user_id: uuid.UUID; title: str; mode: str; pinned: bool; selected_chat_model_id: uuid.UUID | None = None; created_at: datetime; updated_at: datetime
 
 
 class DashboardResponse(BaseModel):
@@ -98,7 +98,7 @@ class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None; chat_model_id: uuid.UUID | None = None; model_name_snapshot: str | None = None; retrieved_chunk_ids: list[uuid.UUID]
     duration_ms: int | None; first_token_latency_ms: int | None; problem_id: uuid.UUID | None
-    mode: str; knowledge_scope: Literal["none", "all"]; solution_language: str | None; created_at: datetime
+    mode: str; solution_language: str | None; created_at: datetime
 class MessagePage(BaseModel):
     items: list[MessageResponse]
     has_more: bool
@@ -109,8 +109,6 @@ class ChatRequest(BaseModel):
     mode: str = Field(default="normal", pattern="^(normal|acm_analysis|acm_solution)$")
     solution_language: str | None = Field(default=None, pattern="^(cpp|java|python)$")
     chat_model_id: uuid.UUID | None = None
-    attachment_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
-    knowledge_scope: Literal["none", "all"] = "none"
     reuse_last_user: bool = False
     problem_id: uuid.UUID | None = None
 
@@ -364,20 +362,6 @@ class DocumentUploadPolicyResponse(BaseModel):
     format_description: str
 
 
-class AttachmentResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: uuid.UUID
-    conversation_id: uuid.UUID
-    document_version_id: uuid.UUID
-    document_id: uuid.UUID | None = None
-    title: str | None = None
-    original_filename: str | None = None
-    extension: str | None = None
-    status: str | None = None
-    scope: str | None = None
-    created_at: datetime
-
-
 class ModelConnectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     base_url: str = Field(min_length=1, max_length=500)
@@ -410,6 +394,7 @@ class ModelConnectionUpdate(BaseModel):
 
 class ChatModelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    context_window_tokens: int | None = Field(default=None, ge=256, le=2_000_000)
 
     @field_validator("name")
     @classmethod
@@ -442,6 +427,13 @@ class ChatModelResponse(BaseModel):
     verification_error: str | None
     last_tested_at: datetime | None
     is_default: bool = False
+    capabilities: dict[str, str] = Field(default_factory=dict)
+    context_window_tokens: int | None = None
+
+
+class ChatModelUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    context_window_tokens: int | None = Field(ge=256, le=2_000_000)
 
 
 class EmbeddingConfigUpdate(BaseModel):

@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -30,13 +30,11 @@ def test_message_context_metadata_preserves_retry_context():
     message = SimpleNamespace(
         problem_id=problem_id,
         mode="acm_solution",
-        knowledge_scope="all",
         solution_language="python",
     )
 
     assert message_context_metadata(message) == {
         "problem_id": problem_id,
         "mode": "acm_solution",
-        "knowledge_scope": "all",
         "solution_language": "python",
     }
