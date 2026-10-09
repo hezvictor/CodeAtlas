@@ -64,6 +64,15 @@ class ConversationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(default="新对话", min_length=1, max_length=200)
     mode: str = Field(default="normal", pattern="^(normal|acm_analysis|acm_solution)$")
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        title = value.strip()
+        if not title:
+            raise ValueError("title must not be blank")
+        return title
+
 class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     pinned: bool | None = None
@@ -71,7 +80,12 @@ class ConversationUpdate(BaseModel):
     @field_validator("title")
     @classmethod
     def normalize_title(cls, value):
-        return value.strip() if value is not None else value
+        if value is None:
+            return None
+        title = value.strip()
+        if not title:
+            raise ValueError("title must not be blank")
+        return title
 
     @model_validator(mode="after")
     def has_changes(self):
@@ -98,11 +112,11 @@ class MessageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID; conversation_id: uuid.UUID; role: str; content: str; status: str; model: str | None; chat_model_id: uuid.UUID | None = None; model_name_snapshot: str | None = None; retrieved_chunk_ids: list[uuid.UUID]
     duration_ms: int | None; first_token_latency_ms: int | None; problem_id: uuid.UUID | None
-    mode: str; solution_language: str | None; created_at: datetime
+    mode: str; solution_language: str | None; created_at: datetime; position: int
 class MessagePage(BaseModel):
     items: list[MessageResponse]
     has_more: bool
-    next_before: datetime | None
+    next_before: int | None
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     content: str = Field(min_length=1, max_length=20000)
@@ -460,8 +474,18 @@ class EmbeddingConfigResponse(BaseModel):
 
 class RerankerConfigUpdate(BaseModel):
     base_url: str = Field(min_length=1, max_length=500)
-    api_key: str = Field(min_length=1, max_length=500)
+    api_key: str | None = Field(default=None, min_length=1, max_length=500)
     model_name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("api_key")
+    @classmethod
+    def normalize_optional_reranker_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("api_key must not be blank")
+        return value
 
 
 class RerankerConfigResponse(BaseModel):

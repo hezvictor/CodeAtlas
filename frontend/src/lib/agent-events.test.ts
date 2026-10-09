@@ -1,6 +1,6 @@
 ﻿import assert from "node:assert/strict";
 import test from "node:test";
-import { reduceAgentEvent, capabilityLabel, modelCanUseTools } from "./agent-events";
+import { reduceAgentEvent, capabilityLabel, modelIsChatReady } from "./agent-events";
 
 test("tool events update the same step, reject stale replay and exclude raw payloads", () => {
   let steps = reduceAgentEvent([], "tool.started", { step_id: "one", tool: "search_knowledge", sequence: 1 });
@@ -12,8 +12,9 @@ test("tool events update the same step, reject stale replay and exclude raw payl
   assert.doesNotMatch(JSON.stringify(steps), /SECRET|RAW/);
 });
 
-test("ordinary connectivity alone never indicates tool readiness", () => {
-  assert.equal(modelCanUseTools({ status: "verified", capabilities: { chat: "verified" } }), false);
+test("verified chat connection is ready without tool capability", () => {
+  assert.equal(modelIsChatReady({ status: "verified", capabilities: { chat: "verified" } }), true);
+  assert.equal(modelIsChatReady({ status: "verified", capabilities: {} }), false);
   assert.equal(capabilityLabel({ status: "incomplete" }), "检测未完成，请重试");
-  assert.equal(modelCanUseTools({ status: "verified", capabilities: { chat: "verified", tool_calling: "verified", tool_result: "verified" } }), true);
+  assert.equal(capabilityLabel({ status: "verified", capabilities: { chat: "verified" } }), "连接成功");
 });

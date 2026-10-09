@@ -56,11 +56,10 @@ def test_context_budget_rejects_oversized_whole_file_without_truncation():
         check_context_capacity([{"role": "user", "content": "全文" * 1000}], [], 1000)
 
 
-def test_unknown_model_capacity_cannot_accept_temporary_full_text():
+def test_unknown_model_capacity_defers_full_text_limit_to_provider():
     from app.agent.budget import check_context_capacity
 
-    with pytest.raises(ValueError, match="CONTEXT_CAPACITY_UNKNOWN"):
-        check_context_capacity([{"role": "user", "content": "full"}], [], None, requires_full_text=True)
+    check_context_capacity([{"role": "user", "content": "full"}], [], None, requires_full_text=True)
 
 
 def test_answer_cannot_persist_full_file_or_file_metadata():
@@ -80,3 +79,44 @@ def test_quote_budget_counts_previously_saved_answers():
     files = [{"text": text, "filename": "private.txt"}]
     with pytest.raises(ValueError, match="TEMPORARY_QUOTE_LIMIT"):
         validate_answer(text[30:50], files, [text[:20]])
+
+
+def test_large_contiguous_copy_is_rejected_without_expensive_matching():
+    from app.temporary.privacy import validate_answer
+
+    with pytest.raises(ValueError, match="TEMPORARY_QUOTE_LIMIT"):
+        validate_answer("b" + "a" * 1000, [{"text": "a" * 100_000, "filename": "sample.txt"}], [])
+
+
+def test_large_contiguous_copy_is_rejected_even_when_match_starts_late():
+    from app.temporary.privacy import validate_answer
+
+    with pytest.raises(ValueError, match="TEMPORARY_QUOTE_LIMIT"):
+        validate_answer("b" * 32 + "a" * 1000 + "c" * 32,
+                        [{"text": "a" * 100_000, "filename": "sample.txt"}], [])
+
+
+@pytest.mark.asyncio
+async def test_temporary_content_check_yields_to_other_requests(monkeypatch):
+    import asyncio
+    import time
+
+    from app.temporary import privacy
+
+    monkeypatch.setattr(privacy, "validate_answer", lambda *_args: time.sleep(0.1))
+    check = asyncio.create_task(privacy.validate_answer_async("answer", [], []))
+    await asyncio.sleep(0.01)
+    assert check.done() is False
+    await check
+
+
+@pytest.mark.asyncio
+async def test_temporary_content_check_rejects_when_matching_exceeds_deadline(monkeypatch):
+    import time
+
+    from app.temporary import privacy
+
+    monkeypatch.setattr(privacy, "_VALIDATION_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(privacy, "validate_answer", lambda *_args: time.sleep(0.1))
+    with pytest.raises(ValueError, match="TEMPORARY_QUOTE_LIMIT"):
+        await privacy.validate_answer_async("answer", [], [])

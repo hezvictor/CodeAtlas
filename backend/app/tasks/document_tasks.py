@@ -108,8 +108,9 @@ async def process_document(_ctx, job_id: str) -> dict:
         job.locked_at, job.locked_by = datetime.now(UTC), lease
         job.error_message, job.error_code = None, None
         job.completed_chunks, job.total_chunks = 0, 0
+        supported = version.extension in get_settings().allowed_document_extensions
         config = await session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == document.user_id))
-        if version.extension != ".pdf" and ((config and config.status != "verified") or (not config and not project_embedding_is_configured())):
+        if supported and ((config and config.status != "verified") or (not config and not project_embedding_is_configured())):
             _stage(version, job, "waiting_embedding")
             job.status, job.locked_at, job.locked_by = "waiting_embedding", None, None
             job.attempts -= 1
@@ -120,8 +121,8 @@ async def process_document(_ctx, job_id: str) -> dict:
         await session.commit()
         document_id, version_id, actual_job_id = document.id, version.id, job.id
         try:
-            if version.extension == ".pdf":
-                raise ValueError("此文件暂不支持处理，可下载原文件或删除")
+            if not supported:
+                raise ValueError("此文件格式不支持处理，可下载原文件或删除")
             data = await S3Storage().get_bytes(version.object_key)
             parsed = parse_document(version.original_filename, version.mime_type, data)
             if len(parsed.text) > get_settings().max_extracted_text_chars:

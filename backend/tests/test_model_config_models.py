@@ -38,6 +38,27 @@ def test_model_configuration_exposes_a_connection_scoped_model_list_route():
 
 
 @pytest.mark.asyncio
+async def test_available_models_query_requires_chat_verification_only():
+    from sqlalchemy.dialects import postgresql
+
+    from app.routers.model_connections import available_models
+
+    statements = []
+    class Session:
+        async def get(self, *_args): return None
+        async def execute(self, statement):
+            statements.append(statement)
+            return type("Rows", (), {"all": lambda self: []})()
+
+    assert await available_models(user_id=uuid.uuid4(), session=Session()) == []
+    sql = str(statements[0].whereclause.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "chat_models.status = 'verified'" in sql
+    assert "'chat'" in sql
+    assert "'tool_calling'" not in sql
+    assert "'tool_result'" not in sql
+
+
+@pytest.mark.asyncio
 async def test_chat_model_resolution_never_falls_back_to_environment_credentials(monkeypatch):
     from fastapi import HTTPException
 

@@ -17,6 +17,9 @@ async def test_retry_rejects_an_active_generation(monkeypatch):
     cid, mid, uid = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
     class Session:
+        async def execute(self, *_args, **_kwargs):
+            return None
+
         async def scalar(self, *_args, **_kwargs):
             return Conversation(id=cid, user_id=uid, title="active")
 
@@ -51,12 +54,15 @@ async def test_retry_rejects_older_assistant_message(monkeypatch):
     class Session:
         calls = 0
 
+        async def execute(self, *_args, **_kwargs):
+            return None
+
         async def scalar(self, *_args, **_kwargs):
             self.calls += 1
             if self.calls == 1:
                 return Conversation(id=cid, user_id=uid, title="active")
             if self.calls == 2:
-                return Message(id=mid, conversation_id=cid, role="assistant", content="old answer", created_at=datetime.now(UTC))
+                return Message(id=mid, conversation_id=cid, role="assistant", content="old answer", position=1, created_at=datetime.now(UTC))
             return uuid.uuid4()
 
     async def override_session():
@@ -94,6 +100,17 @@ def test_conversation_update_allows_title_and_pinned_optional():
 
     assert ConversationUpdate(title=" renamed ").title == "renamed"
     assert ConversationUpdate(pinned=True).pinned is True
+
+
+def test_conversation_titles_reject_whitespace_after_normalization():
+    from app.schemas import ConversationCreate, ConversationUpdate
+
+    with pytest.raises(ValueError):
+        ConversationCreate(title="   ")
+    with pytest.raises(ValueError):
+        ConversationUpdate(title="   ")
+    assert ConversationCreate(title="  题解  ").title == "题解"
+    assert ConversationUpdate(title="  题解  ").title == "题解"
 
 
 def test_bulk_conversation_request_validates_action_and_ids():

@@ -8,22 +8,21 @@ import LanguageDialog, { SolutionLanguage } from "../../components/LanguageDialo
 import ProblemMentionPicker from "../../components/ProblemMentionPicker";
 import TemporaryFilePicker from "../../components/TemporaryFilePicker";
 import ChatRunProgress from "../../components/ChatRunProgress";
-import { reduceAgentEvent, runErrorMessage, type AgentStep } from "../../lib/agent-events";
 import MessageContent from "../../components/MessageContent";
 import ConversationMenu from "../../components/ConversationMenu";
 import CitationPanel, { Citation, RetrievalStatus, SessionFile } from "../../components/CitationPanel";
 import type { ProblemSummary } from "../../components/ProblemCard";
 import { apiFetch, reportError } from "../../lib/errors";
 import { restoreConversationContext } from "../../lib/chat-context";
-import { createDraftConversation, deriveConversationTitle, mergeMessagePage, parseChatLaunch, sortConversations, sortMessages } from "../../lib/chat-state";
-import { SseDecoder } from "../../lib/sse";
+import { updateAssistantMessage } from "../../lib/chat-run-state";
+import { ChatSubmitGate, ConversationSelection, createDraftConversation, deriveConversationTitle, mergeMessagePage, parseChatLaunch, sortConversations, sortMessages } from "../../lib/chat-state";
+import { useChatRun } from "../../hooks/useChatRun";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
-type Message = { id?: string; created_at?: string; role: "user" | "assistant"; content: string; status?: string; problem_id?: string | null; mode?: ChatMode; solution_language?: SolutionLanguage | null };
+type Message = { id?: string; created_at?: string; position?: number; role: "user" | "assistant"; content: string; status?: string; problem_id?: string | null; mode?: ChatMode; solution_language?: SolutionLanguage | null };
 type Conversation = { id: string; title: string; updated_at: string; pinned?: boolean; selected_chat_model_id?: string | null };
 type ChatModelOption = { id: string; connection_id: string; connection_name?: string | null; name: string; status: string; is_default?: boolean };
-type MessagePage = { items: Message[]; has_more: boolean; next_before: string | null };
-type StreamPayload = { sequence?: number; step_id?: string; tool?: string; count?: number; code?: string; message_id?: string; run_id?: string; content?: string; delta?: string; status?: string; items?: Citation[]; message?: string };
+type MessagePage = { items: Message[]; has_more: boolean; next_before: number | null };
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -37,11 +36,11 @@ function stateLabel(mode?: ChatMode) {
 export default function ChatPage() {
   const [token, setToken] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
   const [active, setActive] = useState<Conversation | null>(null);
   const [draft, setDraft] = useState(createDraftConversation());
   const [messages, setMessages] = useState<Message[]>([]);
   const [query, setQuery] = useState("");
-  const [runs, setRuns] = useState<Record<string, { runId: string; status?: string }>>({});
   const [mode, setMode] = useState<ChatMode>("normal");
   const [modeOpen, setModeOpen] = useState(false);
   const [solutionLanguage, setSolutionLanguage] = useState<SolutionLanguage | null>(null);
@@ -49,8 +48,6 @@ export default function ChatPage() {
   const [selectedProblem, setSelectedProblem] = useState<ProblemSummary | null>(null);
   const [chatModels, setChatModels] = useState<ChatModelOption[]>([]);
   const [selectedChatModelId, setSelectedChatModelId] = useState("");
-  const [steps, setSteps] = useState<Record<string, AgentStep[]>>({});
-  const [disconnected, setDisconnected] = useState<Record<string, boolean>>({});
   const [sessionFiles, setSessionFiles] = useState<SessionFile[]>([]);
   const [citations, setCitations] = useState<Citation[]>([]);
   const [citationLoading, setCitationLoading] = useState(false);
@@ -59,18 +56,15 @@ export default function ChatPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [nextBefore, setNextBefore] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const activeConversationIdRef = useRef<string | null>(null);
-  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
-  const runIdsRef = useRef<Record<string, string>>({});
+  const conversationSelectionRef = useRef(new ConversationSelection());
+  const submitGateRef = useRef(new ChatSubmitGate());
   const auth = useCallback(() => ({ Authorization: `Bearer ${token}` }), [token]);
-  const waiting = Boolean(active && runs[active.id]?.status === "waiting_context");
-  const running = Boolean(active && runs[active.id] && !waiting);
 
-  const loadMessagePage = useCallback(async (conversationId: string, before?: string): Promise<MessagePage> => {
+  const loadMessagePage = useCallback(async (conversationId: string, before?: number): Promise<MessagePage> => {
     const suffix = before ? `&before=${encodeURIComponent(before)}` : "";
     const response = await apiFetch(`${API}/conversations/${conversationId}/messages?limit=30${suffix}`, { headers: auth() });
     return response.json();
@@ -82,96 +76,64 @@ export default function ChatPage() {
     try {
       const response = await apiFetch(`${API}/conversations/${conversationId}/messages/${messageId}/citations`, { headers: auth() });
       const data = await response.json();
-      if (activeConversationIdRef.current === conversationId) setCitations(Array.isArray(data) ? data : data.items || []);
+      if (conversationSelectionRef.current.currentId === conversationId) setCitations(Array.isArray(data) ? data : data.items || []);
     } catch { /* citation loading is non-blocking */ } finally { setCitationLoading(false); }
   }, [auth]);
 
-  const consumeReader = useCallback(async (conversationId: string, reader: ReadableStreamDefaultReader<Uint8Array>, initial = "") => {
-    readerRef.current = reader;
-    setDisconnected(current => ({ ...current, [conversationId]: false }));
-    const decoder = new SseDecoder();
-    let answer = initial;
-    let status = "generating";
-    let messageId: string | undefined;
-    let snapshotSequence = 0;
-    const update = () => {
-      if (activeConversationIdRef.current !== conversationId) return;
-      setMessages(items => items.map(item => item.id === messageId || (!item.id && item.role === "assistant") ? { ...item, id: messageId || item.id, content: answer, status } : item));
-    };
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        for (const { event, data: rawData } of decoder.push(chunk.value)) {
-          const data = rawData as StreamPayload;
-          // Replay real progress, but never let an old terminal event stop a resumed run.
-          if (event.startsWith("run.") && event !== "run.snapshot" && (data.sequence || 0) <= snapshotSequence && data.sequence !== undefined) continue;
-          messageId = data.message_id || messageId;
-          if (event === "run.snapshot") {
-            snapshotSequence = data.sequence || 0;
-            answer = data.content || answer;
-            status = data.status || status;
-            const runId = data.run_id;
-            if (runId) runIdsRef.current[conversationId] = runId;
-            if (runId) setRuns(current => ({ ...current, [conversationId]: { runId, status } }));
-          } else if (event === "run.started") status = "running";
-          else if (event === "retrieval.completed" && activeConversationIdRef.current === conversationId) setRetrievalStatus((data.status || "ok") as RetrievalStatus);
-          else if (event === "message.delta") answer += data.content || data.delta || "";
-          else if (event === "message.final") answer = data.content || answer;
-          else if (event === "citations.validated" && activeConversationIdRef.current === conversationId) setCitations(data.items || []);
-          else if (event === "run.interrupted") status = "cancelled";
-          else if (event === "run.waiting") { status = "waiting_context"; answer = runErrorMessage(data.code); }
-          else if (event === "run.failed") { status = "failed"; answer = data.message || runErrorMessage(data.code); }
-          else if (event === "run.completed") status = "completed";
-          setSteps(current => ({ ...current, [conversationId]: reduceAgentEvent(current[conversationId] || [], event, data) }));
-          if (status === "waiting_context") setRuns(current => ({ ...current, [conversationId]: { runId: data.run_id || current[conversationId]?.runId || "", status } }));
-          update();
-        }
-      }
-    } catch {
-      // A transport loss never cancels the durable run or sends the question again.
-      setDisconnected(current => ({ ...current, [conversationId]: true }));
-    } finally {
-      if (["generating", "queued", "running"].includes(status)) setDisconnected(current => ({ ...current, [conversationId]: true }));
-      if (readerRef.current === reader) readerRef.current = null;
-      if (!["generating", "queued", "running", "waiting_context"].includes(status)) setRuns(current => { const next = { ...current }; delete next[conversationId]; return next; });
-      if (messageId) loadSources(conversationId, messageId);
-    }
-  }, [loadSources]);
-
-  const consumeStream = useCallback(async (conversationId: string, runId: string, initial = "") => {
-    const response = await apiFetch(`${API}/conversations/${conversationId}/runs/${runId}/stream`, { headers: auth() });
-    const reader = response.body?.getReader();
-    if (reader) await consumeReader(conversationId, reader, initial);
-  }, [auth, consumeReader]);
-
-  const reconnect = useCallback(async (conversationId: string) => {
-    try {
-      const response = await apiFetch(`${API}/conversations/${conversationId}/runs/active`, { headers: auth() });
-      if (!response.ok) return;
-      const data = await response.json();
-      const runId = data?.run_id || runIdsRef.current[conversationId];
-      if (!runId) return;
-      setDisconnected(current => ({ ...current, [conversationId]: false }));
-      setRuns(current => ({ ...current, [conversationId]: { runId, status: data?.status || "running" } }));
-      await consumeStream(conversationId, runId, data?.content || "");
-    } catch { setDisconnected(current => ({ ...current, [conversationId]: true })); }
-  }, [auth, consumeStream]);
+  const chatRun = useChatRun({
+    auth,
+    isCurrent: conversationId => conversationSelectionRef.current.currentId === conversationId,
+    onFrame: (conversationId, view, event) => {
+      setMessages(items => updateAssistantMessage(items, view));
+      if (event === "retrieval.completed") setRetrievalStatus(view.retrievalStatus);
+      if (event === "citations.validated") setCitations(view.citations);
+    },
+    onFinished: loadSources,
+  });
+  const { cancelReader, resetView, startPending, failPending, consumeReader, reconnect,
+    stop: stopChatRun, resume: resumeChatRun } = chatRun;
+  const activeRun = active ? chatRun.views[active.id] : undefined;
+  const activeConversationId = active?.id;
+  const waiting = activeRun?.status === "waiting_context";
+  const running = Boolean(activeRun && ["generating", "queued", "running"].includes(activeRun.status));
 
   useEffect(() => {
     const currentToken = localStorage.getItem("codeatlas_access_token") || "";
     setToken(currentToken);
     if (!currentToken) return;
+    let cancelled = false;
     Promise.all([
       apiFetch(`${API}/conversations`, { headers: { Authorization: `Bearer ${currentToken}` } }),
       apiFetch(`${API}/model-connections/available`, { headers: { Authorization: `Bearer ${currentToken}` } }),
     ]).then(async ([conversationResponse, modelsResponse]) => {
       const list = await conversationResponse.json();
       const models = await modelsResponse.json();
-      setConversations(sortConversations(Array.isArray(list) ? list : []));
+      if (cancelled) return;
+      const items: Conversation[] = Array.isArray(list) ? list : [];
+      setConversations(sortConversations(items));
       setChatModels(Array.isArray(models) ? models : []);
-    }).catch(error => reportError(error, "会话列表加载失败，请稍后重试"));
+      const conversationId = parseChatLaunch(window.location.search).conversationId;
+      if (conversationId) setActive(items.find(item => item.id === conversationId) || null);
+      setConversationsLoaded(true);
+    }).catch(error => { if (!cancelled) reportError(error, "会话列表加载失败，请稍后重试"); });
+    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!conversationsLoaded) return;
+    const url = new URL(window.location.href);
+    if (activeConversationId) {
+      url.searchParams.set("conversation_id", activeConversationId);
+      url.searchParams.delete("problem_id");
+      url.searchParams.delete("mode");
+    } else {
+      url.searchParams.delete("conversation_id");
+    }
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(window.history.state, "", next);
+    }
+  }, [activeConversationId, conversationsLoaded]);
 
   useEffect(() => {
     if (!token) return;
@@ -185,15 +147,16 @@ export default function ChatPage() {
   }, [token, auth]);
 
   useEffect(() => {
-    if (activeConversationIdRef.current !== (active?.id || null)) readerRef.current?.cancel().catch(() => undefined);
-    activeConversationIdRef.current = active?.id || null;
+    if (!conversationSelectionRef.current.select(active?.id || null)) return;
+    cancelReader();
     if (!active || !token) return;
     const conversationId = active.id;
+    resetView(conversationId);
     setSelectedChatModelId(active.selected_chat_model_id || chatModels.find(model => model.is_default)?.id || chatModels[0]?.id || "");
     setMessages([]); setHasMore(false); setNextBefore(null); setCitations([]); setRetrievalStatus("not_requested"); setSelectedProblem(null); setSessionFiles([]);
     loadMessagePage(conversationId).then(data => {
       const items = sortMessages<Message>(data.items || []);
-      if (activeConversationIdRef.current !== conversationId) return;
+      if (conversationSelectionRef.current.currentId !== conversationId) return;
       setMessages(items);
       setHasMore(Boolean(data.has_more)); setNextBefore(data.next_before);
       const context = restoreConversationContext(items);
@@ -201,11 +164,11 @@ export default function ChatPage() {
       const latest = [...items].reverse().find(item => item.role === "assistant");
       loadSources(conversationId, latest?.id);
       reconnect(conversationId);
-    }).catch(error => { if (activeConversationIdRef.current === conversationId) reportError(error, "历史消息加载失败，请稍后重试"); });
+    }).catch(error => { if (conversationSelectionRef.current.currentId === conversationId) reportError(error, "历史消息加载失败，请稍后重试"); });
     apiFetch(`${API}/conversations/${conversationId}/temporary-files`, { headers: auth() }).then(response => response.json()).then(items => {
-      if (activeConversationIdRef.current === conversationId && Array.isArray(items)) { setSessionFiles(items); }
+      if (conversationSelectionRef.current.currentId === conversationId && Array.isArray(items)) { setSessionFiles(items); }
     }).catch(() => undefined);
-  }, [active, token, chatModels, auth, loadMessagePage, loadSources, reconnect]);
+  }, [active, token, chatModels, auth, loadMessagePage, loadSources, reconnect, cancelReader, resetView]);
 
   async function loadOlder() {
     if (!active || !nextBefore || loadingOlder) return;
@@ -213,7 +176,7 @@ export default function ChatPage() {
     setLoadingOlder(true);
     try {
       const page = await loadMessagePage(conversationId, nextBefore);
-      if (activeConversationIdRef.current !== conversationId) return;
+      if (conversationSelectionRef.current.currentId !== conversationId) return;
       setMessages(current => mergeMessagePage(current, page.items || []));
       setHasMore(Boolean(page.has_more)); setNextBefore(page.next_before);
     } catch (error) { reportError(error, "较早消息加载失败"); }
@@ -228,6 +191,7 @@ export default function ChatPage() {
     if (active) return active;
     const response = await apiFetch(`${API}/conversations`, { method: "POST", headers: { ...auth(), "Content-Type": "application/json" }, body: JSON.stringify({ title: deriveConversationTitle(text), mode }) });
     const conversation = await response.json() as Conversation;
+    conversationSelectionRef.current.created(conversation.id);
     setConversations(items => sortConversations([conversation, ...items]));
     setActive(conversation);
     return conversation;
@@ -241,9 +205,13 @@ export default function ChatPage() {
     if (!text || running || waiting) return;
     if (!selectedChatModelId) { reportError(new Error("请先在模型配置页验证一个聊天模型")); return; }
     if (mode === "acm_solution" && !solutionLanguage) { setLanguageOpen(true); return; }
-    setQuery("");
-    const conversation = await ensureConversation(text);
-    await run(conversation, text);
+    await submitGateRef.current.submit(text, ensureConversation, run, {
+      onStart: () => setQuery(""),
+      onCreateFailure: (draft, error) => {
+        setQuery(current => current || draft);
+        reportError(error, "创建会话失败，请稍后重试");
+      },
+    });
   }
 
   async function run(conversation: Conversation, text: string, reuseLastUser = false, retryContext?: { mode?: ChatMode; solution_language?: SolutionLanguage | null; problem_id?: string | null }) {
@@ -251,8 +219,7 @@ export default function ChatPage() {
     const runLanguage = retryContext?.solution_language === undefined ? solutionLanguage : retryContext.solution_language;
     const runProblemId = retryContext?.problem_id === undefined ? selectedProblem?.id || null : retryContext.problem_id;
     setRetrievalStatus("pending");
-    setSteps(current => ({ ...current, [conversation.id]: [] }));
-    setRuns(current => ({ ...current, [conversation.id]: { runId: "", status: "queued" } }));
+    startPending(conversation.id);
     setCitations([]);
     const payload = { content: text, mode: runMode, solution_language: runLanguage, problem_id: runProblemId, chat_model_id: selectedChatModelId, reuse_last_user: reuseLastUser };
     setMessages(items => [...items, ...(reuseLastUser ? [] : [{ role: "user" as const, content: text, status: "completed", mode: runMode }]), { role: "assistant", content: "", status: "generating", mode: runMode }]);
@@ -262,7 +229,7 @@ export default function ChatPage() {
       if (reader) await consumeReader(conversation.id, reader);
     } catch (error) {
       setMessages(items => { const next = [...items]; const index = next.map(item => item.role).lastIndexOf("assistant"); if (index >= 0 && next[index].status === "generating") next[index] = { ...next[index], status: "failed", content: "发送失败，请稍后重试" }; return next; });
-      setRuns(current => { const next = { ...current }; delete next[conversation.id]; return next; });
+      failPending(conversation.id);
       setQuery(text);
       reportError(error, "发送失败，请稍后重试");
     }
@@ -275,7 +242,7 @@ export default function ChatPage() {
       const response = await apiFetch(`${API}/conversations/${conversationId}/messages/${message.id}/retry`, { method: "POST", headers: { ...auth(), "Content-Type": "application/json" }, body: JSON.stringify(editedContent ? { content: editedContent } : {}) });
       const context = await response.json();
       const page = await loadMessagePage(conversationId);
-      if (activeConversationIdRef.current !== conversationId) return;
+      if (conversationSelectionRef.current.currentId !== conversationId) return;
       setMessages(sortMessages(page.items || [])); setHasMore(Boolean(page.has_more)); setNextBefore(page.next_before);
       setMode(context.mode || "normal"); setSolutionLanguage(context.solution_language || null);
       setSelectedProblem(null);
@@ -284,19 +251,14 @@ export default function ChatPage() {
   }
 
   async function stop() {
-    if (!active || !runs[active.id]) return;
-    await apiFetch(`${API}/conversations/${active.id}/run/stop`, { method: "POST", headers: auth() }).catch(error => reportError(error, "停止生成失败，请稍后重试"));
+    if (!active || !activeRun || !["queued", "running", "waiting_context"].includes(activeRun.status)) return;
+    await stopChatRun(active.id).catch(error => reportError(error, "停止生成失败，请稍后重试"));
   }
 
   async function resume() {
     if (!active || !waiting) return;
     try {
-      const response = await apiFetch(`${API}/conversations/${active.id}/run/resume`, { method: "POST", headers: auth() });
-      const data = await response.json();
-      runIdsRef.current[active.id] = data.run_id;
-      setSteps(current => ({ ...current, [active.id]: [] }));
-      setRuns(current => ({ ...current, [active.id]: { runId: data.run_id, status: data.status } }));
-      await consumeStream(active.id, data.run_id);
+      await resumeChatRun(active.id);
     } catch (error) { reportError(error, "恢复失败，请先重新上传临时文件"); }
   }
 
@@ -354,10 +316,10 @@ export default function ChatPage() {
           {messages.map((message, index) => {
             const previous = messages[index - 1];
             const changed = index > 0 && message.mode !== previous?.mode;
-            return <div key={message.id || index}>{changed && <div className="chat-state-divider">{stateLabel(message.mode)}</div>}<article className={`msg ${message.role}`}><div className="msg-heading"><div className="label">{message.role === "user" ? "你" : "CODEATLAS"}</div>{message.status === "generating" && <span className="msg-metrics">正在生成…</span>}</div>{message.role === "assistant" && index === messages.length - 1 && active && <ChatRunProgress steps={steps[active.id] || []} />}{message.content ? message.role === "assistant" ? <MessageContent content={message.content} /> : <p className="message-plain">{message.content}</p> : <p className="message-plain">正在生成…</p>}<div className="msg-actions"><CopyButton text={message.content} />{message.id && !running && selectedChatModelId && message.role === "user" && <button className="icon-button" onClick={() => { const edited = window.prompt("修改消息并重新生成；此消息之后的对话会被清除", message.content); if (edited?.trim()) retryMessage(message, edited.trim()); }}>编辑并重试</button>}{message.id && !running && selectedChatModelId && message.role === "assistant" && index === messages.length - 1 && <button className="icon-button" onClick={() => retryMessage(message)}>重新生成</button>}</div></article></div>;
+            return <div key={message.id || index}>{changed && <div className="chat-state-divider">{stateLabel(message.mode)}</div>}<article className={`msg ${message.role}`}><div className="msg-heading"><div className="label">{message.role === "user" ? "你" : "CODEATLAS"}</div>{message.status === "generating" && <span className="msg-metrics">正在生成…</span>}</div>{message.role === "assistant" && index === messages.length - 1 && active && <ChatRunProgress steps={activeRun?.steps || []} />}{message.content ? message.role === "assistant" ? <MessageContent content={message.content} /> : <p className="message-plain">{message.content}</p> : <p className="message-plain">正在生成…</p>}<div className="msg-actions"><CopyButton text={message.content} />{message.id && !running && selectedChatModelId && message.role === "user" && <button className="icon-button" onClick={() => { const edited = window.prompt("修改消息并重新生成；此消息之后的对话会被清除", message.content); if (edited?.trim()) retryMessage(message, edited.trim()); }}>编辑并重试</button>}{message.id && !running && selectedChatModelId && message.role === "assistant" && index === messages.length - 1 && <button className="icon-button" onClick={() => retryMessage(message)}>重新生成</button>}</div></article></div>;
           })}
         </div>
-        {active && disconnected[active.id] && <div className="context-warning" role="status">连接已断开，后台运行继续。<button type="button" onClick={() => reconnect(active.id)}>重新连接</button></div>}
+        {active && activeRun?.disconnected && <div className="context-warning" role="status">连接已断开，后台运行继续。<button type="button" onClick={() => reconnect(active.id)}>重新连接</button></div>}
         <form className="composer" onSubmit={send}><div className="composer-input"><textarea value={query} onChange={event => { setQuery(event.target.value); const at = event.target.value.lastIndexOf("@"); setMentionQuery(at >= 0 ? event.target.value.slice(at + 1) : null); }} placeholder="向 CodeAtlas 提问，输入 @ 召回题库内容" disabled={running} />{mentionQuery !== null && <ProblemMentionPicker token={token} query={mentionQuery} onSelect={problem => { setSelectedProblem(problem); setMentionQuery(null); }} />}</div><div className="composer-foot"><TemporaryFilePicker conversationId={active?.id || ""} ensureConversation={ensureTemporaryConversation} token={token} items={sessionFiles} onItems={setSessionFiles} disabled={running} /><button type="button" disabled={running} onClick={() => setModeOpen(true)}>⌘ {chatModeLabels[mode]}</button>{waiting ? <><button type="button" onClick={stop}>结束运行</button><button type="button" className="send" onClick={resume}>恢复运行</button></> : running ? <button type="button" className="send" onClick={stop}>停止</button> : <button className="send" disabled={!selectedChatModelId}>发送 ↑</button>}</div></form>
       </section>
       <CitationPanel citations={citations} sessionFiles={sessionFiles} loading={citationLoading} retrievalStatus={retrievalStatus} />

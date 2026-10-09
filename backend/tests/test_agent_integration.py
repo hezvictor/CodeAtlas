@@ -42,6 +42,7 @@ async def runtime(monkeypatch):
     if os.getenv("RUN_AGENT_INTEGRATION") != "1": pytest.skip("requires disposable agent test services")
     if not get_settings().database_url.endswith("/codeatlas_agent_test"):
         pytest.fail("Refusing integration writes outside codeatlas_agent_test")
+    import app.chat_runtime.infrastructure as infrastructure
     import app.chat_runtime.service as service
     from app.chat_runtime.infrastructure import RuntimeResources
     from app.dependencies import current_user_id
@@ -50,6 +51,7 @@ async def runtime(monkeypatch):
     engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(service, "session_factory", factory)
+    monkeypatch.setattr(infrastructure, "session_factory", factory)
     monkeypatch.setattr(sys.modules[__name__], "session_factory", factory)
     resources = await RuntimeResources().open()
     app.state.runtime = resources
@@ -105,6 +107,77 @@ async def execute(fixture, run):
         saved = await session.get(ChatRun, run.id)
         message = await session.get(Message, saved.message_id)
         return saved, message
+
+
+@pytest.mark.asyncio
+async def test_reassigned_worker_cannot_replace_private_context_or_checkpoint(runtime):
+    from app.agent.graph import build_graph
+    from app.chat_runtime.infrastructure import FencedPostgresSaver, fenced_cache_save
+
+    f = runtime
+    run = await new_run(f)
+    old_owner, new_owner = uuid4(), uuid4()
+    async with session_factory() as session:
+        current = await session.get(ChatRun, run.id)
+        current.status, current.owner = "running", old_owner
+        await session.commit()
+    old_saver = FencedPostgresSaver(f.resources.pool, run.id, old_owner)
+    old_graph = build_graph(old_saver)
+    await fenced_cache_save(f.resources.cache, run.id, old_owner, {"messages": [{"content": "new"}], "files": []})
+    async with session_factory() as session:
+        current = await session.get(ChatRun, run.id)
+        current.owner = new_owner
+        await session.commit()
+    with pytest.raises(asyncio.CancelledError):
+        await fenced_cache_save(f.resources.cache, run.id, old_owner, {"messages": [{"content": "stale"}], "files": []})
+    with pytest.raises(asyncio.CancelledError):
+        await old_graph.aupdate_state({"configurable": {"thread_id": str(run.id)}}, {"done": True}, as_node="model")
+    with pytest.raises(asyncio.CancelledError):
+        await old_saver.adelete_thread(str(run.id))
+    assert (await f.resources.cache.load(run.id))["messages"][0]["content"] == "new"
+    assert await f.resources.checkpointer.aget_tuple({"configurable": {"thread_id": str(run.id)}}) is None
+
+
+@pytest.mark.asyncio
+async def test_late_waiting_event_cannot_publish_after_resume(runtime):
+    f = runtime
+    run = await new_run(f)
+    owner = uuid4()
+    async with session_factory() as session:
+        current = await session.get(ChatRun, run.id)
+        current.status, current.owner = "queued", None
+        await session.commit()
+    await f.service.publish(f.resources, run.id, "run.waiting", {"code": "TEMPORARY_CONTEXT_LOST"},
+                            owner=owner, status="waiting_context")
+    assert not any(event["name"] == "run.waiting" for event in await f.resources.cache.events(run.id, 0))
+
+
+@pytest.mark.asyncio
+async def test_context_drops_old_history_to_fit_model_capacity(runtime, monkeypatch):
+    f = runtime
+    async with session_factory() as session:
+        model = await session.get(ChatModel, f.models[0])
+        model.context_window_tokens = 12000
+        for index in range(12):
+            session.add(Message(conversation_id=f.conversations[0], role="user" if index % 2 == 0 else "assistant",
+                                content=f"history-{index}:" + "x" * 1000,
+                                status="completed"))
+        await session.commit()
+    run = await new_run(f, content="current question")
+
+    async def no_retrieval(*_args, **_kwargs):
+        return {"evidence": []}
+
+    async def no_emit(*_args):
+        return None
+
+    monkeypatch.setattr(f.service, "retrieve_for_run", no_retrieval)
+    context = await f.service.prepare_context(f.resources, run, no_emit, [])
+    contents = [message["content"] for message in context["messages"]]
+    assert "current question" in contents[-1]
+    assert context["messages"][1]["role"] == "user"
+    assert any("history-11:" in content for content in contents)
+    assert all("history-0:" not in content for content in contents)
 
 
 @pytest.mark.asyncio

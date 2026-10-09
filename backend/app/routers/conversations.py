@@ -1,5 +1,4 @@
-﻿from datetime import datetime
-from uuid import UUID
+﻿from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -44,7 +43,7 @@ from ..schemas import (
 )
 from ..security.provider_credentials import decrypt_secret
 from ..services.problem_context import message_context_metadata
-from ..temporary.privacy import validate_answer
+from ..temporary.privacy import validate_answer_async
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -112,7 +111,7 @@ async def list_conversations(uid=Depends(current_user_id), session=Depends(get_s
 
 @router.post("", response_model=ConversationResponse, status_code=201)
 async def create_conversation(payload: ConversationCreate, uid=Depends(current_user_id), session=Depends(get_session)):
-    item = Conversation(user_id=uid, title=payload.title.strip(), mode=payload.mode); session.add(item); await session.commit(); await session.refresh(item); return item
+    item = Conversation(user_id=uid, title=payload.title, mode=payload.mode); session.add(item); await session.commit(); await session.refresh(item); return item
 
 @router.get("/{cid}", response_model=ConversationResponse)
 async def get_conversation(cid, uid=Depends(current_user_id), session=Depends(get_session)): return await conversation(cid, uid, session)
@@ -155,20 +154,21 @@ async def delete_conversation(cid: UUID, request: Request, uid=Depends(current_u
     await session.commit()
 
 @router.get("/{cid}/messages", response_model=MessagePage)
-async def messages(cid, limit: int = 30, before: datetime | None = None, uid=Depends(current_user_id), session=Depends(get_session)):
+async def messages(cid, limit: int = 30, before: int | None = None, uid=Depends(current_user_id), session=Depends(get_session)):
     await conversation(cid, uid, session)
     limit = max(1, min(limit, 100))
     query = select(Message).where(Message.conversation_id == cid)
-    if before:
-        query = query.where(Message.created_at < before)
-    rows = list((await session.scalars(query.order_by(Message.created_at.desc()).limit(limit + 1))).all())
+    if before is not None:
+        query = query.where(Message.position < before)
+    rows = list((await session.scalars(query.order_by(Message.position.desc()).limit(limit + 1))).all())
     has_more = len(rows) > limit
     items = list(reversed(rows[:limit]))
-    return MessagePage(items=items, has_more=has_more, next_before=items[0].created_at if has_more else None)
+    return MessagePage(items=items, has_more=has_more, next_before=items[0].position if has_more else None)
 
 @router.post("/{cid}/messages/{mid}/retry")
 async def retry_message(cid: UUID, mid: UUID, payload: RetryRequest, request: Request, uid=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     await conversation(cid, uid, session)
+    await session.execute(select(Conversation.id).where(Conversation.id == cid).with_for_update())
     if await active_run(session, cid, uid):
         raise HTTPException(409, "A generation is already running for this conversation")
     target = await session.scalar(select(Message).where(Message.id == mid, Message.conversation_id == cid))
@@ -176,20 +176,20 @@ async def retry_message(cid: UUID, mid: UUID, payload: RetryRequest, request: Re
     content = payload.content.strip() if payload.content else target.content
     if payload.content is not None:
         files = await resources(request).temporary.files(uid, cid)
-        previous = (await session.scalars(select(Message.content).where(Message.conversation_id == cid, Message.created_at < target.created_at))).all()
+        previous = (await session.scalars(select(Message.content).where(Message.conversation_id == cid, Message.position < target.position))).all()
         try:
-            validate_answer(content, files, previous)
+            await validate_answer_async(content, files, previous)
         except ValueError as error:
             raise HTTPException(409, {"code": str(error), "message": "编辑内容包含不可持久化的临时资料，请减少原文引用"}) from None
     if target.role == "user":
         target.content = content
-        await session.execute(Message.__table__.delete().where(Message.conversation_id == cid, Message.created_at > target.created_at))
+        await session.execute(Message.__table__.delete().where(Message.conversation_id == cid, Message.position > target.position))
         context_message = target
     elif target.role == "assistant":
-        newer = await session.scalar(select(Message.id).where(Message.conversation_id == cid, Message.created_at > target.created_at).limit(1))
+        newer = await session.scalar(select(Message.id).where(Message.conversation_id == cid, Message.position > target.position).limit(1))
         if newer:
             raise HTTPException(409, "Only the latest assistant message can be retried")
-        previous = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.created_at < target.created_at).order_by(Message.created_at.desc()))
+        previous = await session.scalar(select(Message).where(Message.conversation_id == cid, Message.position < target.position).order_by(Message.position.desc()))
         if not previous or previous.role != "user": raise HTTPException(400, "Assistant message has no user prompt")
         content = previous.content
         await session.delete(target)

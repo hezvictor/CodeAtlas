@@ -33,15 +33,55 @@ def test_generations_can_stage_without_replacing_the_active_index():
     assert Citation.__table__.columns.chunk_id.nullable
 
 
+@pytest.mark.asyncio
+async def test_failed_upload_commit_removes_only_uncommitted_storage_object(db, monkeypatch):
+    from io import BytesIO
+
+    from starlette.datastructures import Headers, UploadFile
+
+    from app.routers import knowledge_documents as routes
+
+    factory, _, _ = db
+    stored, deleted = [], []
+
+    class Storage:
+        async def put_bytes(self, key, _data, _mime):
+            stored.append(key)
+
+        async def delete(self, key):
+            deleted.append(key)
+
+    monkeypatch.setattr(routes, "S3Storage", Storage)
+    async with factory() as session:
+        user = User(email=f"{uuid4()}@test.invalid", password_hash="test", nickname="test")
+        session.add(user)
+        await session.commit()
+
+        async def failed_commit():
+            raise ConnectionError("injected commit failure")
+
+        monkeypatch.setattr(session, "commit", failed_commit)
+        file = UploadFile(file=BytesIO(b"test content"), filename="notes.txt",
+                          headers=Headers({"content-type": "text/plain"}))
+        with pytest.raises(ConnectionError, match="injected commit failure"):
+            await routes.upload_document(group_id=None, title=None, file=file, conflict_action=None,
+                                         target_document_id=None, upload_token=None, user_id=user.id, session=session)
+    assert len(stored) == 1
+    assert deleted == stored
+
+
 @pytest.fixture
 async def db(monkeypatch):
     if os.getenv("RUN_LIFECYCLE_INTEGRATION") != "1":
         pytest.skip("requires PostgreSQL integration service")
+    if not get_settings().database_url.endswith("/codeatlas_agent_test"):
+        pytest.fail("Refusing integration writes outside codeatlas_agent_test")
     import app.tasks.document_tasks as tasks
 
     schema = "lifecycle_" + uuid4().hex
     admin = create_async_engine(get_settings().database_url)
     async with admin.begin() as connection:
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
     engine = create_async_engine(get_settings().database_url, connect_args={"server_settings": {"search_path": f"{schema},public"}}, execution_options={"schema_translate_map": {None: schema}})
     async with engine.begin() as connection:
@@ -260,6 +300,35 @@ async def test_unconfigured_embedding_keeps_source_but_no_index(db, monkeypatch)
         assert (await session.get(Document, doc_id)).current_version_id is None
         assert (await session.get(DocumentVersion, version_id)).status == "waiting_embedding"
         assert await session.scalar(select(func.count()).select_from(DocumentChunk)) == 0
+    assert not storage.deleted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extension", [".pdf", ".exe"])
+async def test_unsupported_legacy_jobs_fail_without_reading_the_source(db, monkeypatch, extension):
+    factory, tasks, storage = db
+    doc_id, version_id, job_id, _ = await seed(factory)
+    async with factory() as session:
+        version = await session.get(DocumentVersion, version_id)
+        version.extension = extension
+        version.original_filename = "notes" + extension
+        await session.commit()
+    monkeypatch.setattr(tasks, "project_embedding_is_configured", lambda: False)
+
+    reads = []
+
+    async def unexpected_read(_key):
+        reads.append(_key)
+        raise AssertionError("Unsupported source must not be fetched or parsed")
+
+    monkeypatch.setattr(storage, "get_bytes", unexpected_read)
+    assert (await tasks.process_document(None, str(job_id)))["status"] == "failed"
+    async with factory() as session:
+        assert (await session.get(DocumentJob, job_id)).status == "failed"
+        assert (await session.get(DocumentVersion, version_id)).status == "failed"
+        assert (await session.get(Document, doc_id)).current_version_id is None
+        assert await session.scalar(select(func.count()).select_from(DocumentChunk)) == 0
+    assert not reads
     assert not storage.deleted
 
 

@@ -8,6 +8,8 @@ from app.providers.openai_compatible import OpenAICompatibleChatProvider
 
 def install_transport(monkeypatch, handler):
     client_type = httpx.AsyncClient
+    monkeypatch.setattr("app.providers.url_validation.socket.getaddrinfo",
+                        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))])
     monkeypatch.setattr(
         "app.providers.openai_compatible.httpx.AsyncClient",
         lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
@@ -15,39 +17,29 @@ def install_transport(monkeypatch, handler):
 
 
 @pytest.mark.asyncio
-async def test_plain_text_cannot_pass_tool_capability_verification(monkeypatch):
+async def test_plain_chat_response_verifies_connection_without_tool_probe(monkeypatch):
+    requests = []
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "OK"}}]})
+    install_transport(monkeypatch, handle)
+    result = await OpenAICompatibleChatProvider("https://example.test/v1", "secret").test_model("model")
+    assert result.ok is True
+    assert result.status == "verified"
+    assert result.capabilities == {"chat": "verified"}
+    assert len(requests) == 1
+    assert "tools" not in requests[0]
+
+
+@pytest.mark.asyncio
+async def test_empty_chat_response_fails_connection_verification(monkeypatch):
     install_transport(monkeypatch, lambda request: httpx.Response(
-        200, json={"choices": [{"message": {"role": "assistant", "content": "OK"}}]},
+        200, json={"choices": [{"message": {"role": "assistant", "content": ""}}]},
     ))
     result = await OpenAICompatibleChatProvider("https://example.test/v1", "secret").test_model("model")
     assert result.ok is False
     assert result.status == "failed"
-
-
-@pytest.mark.asyncio
-async def test_verification_requires_actual_tool_return_round_trip(monkeypatch):
-    def handle(request):
-        body = json.loads(request.content)
-        messages = body["messages"]
-        if messages[-1]["role"] == "tool":
-            assert messages[-1]["tool_call_id"] == "probe-call"
-            value = json.loads(messages[-1]["content"])["value"]
-            return httpx.Response(200, json={"choices": [{"message": {"content": value}}]})
-        if body.get("tools"):
-            name = body["tools"][0]["function"]["name"]
-            return httpx.Response(200, json={"choices": [{"message": {
-                "role": "assistant", "content": None, "tool_calls": [{
-                    "id": "probe-call", "type": "function",
-                    "function": {"name": name, "arguments": '{"key":"probe"}'},
-                }],
-            }}]})
-        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
-
-    install_transport(monkeypatch, handle)
-    result = await OpenAICompatibleChatProvider("https://example.test/v1", "secret").test_model("model")
-    assert result.ok is True
-    assert result.capabilities["tool_calling"] == "verified"
-    assert result.capabilities["tool_result"] == "verified"
+    assert result.capabilities == {"chat": "failed"}
 
 
 @pytest.mark.asyncio
@@ -58,11 +50,22 @@ async def test_rate_limit_is_incomplete_not_unsupported(monkeypatch):
     result = await OpenAICompatibleChatProvider("https://example.test/v1", "secret").test_model("model")
     assert result.ok is False
     assert result.status == "incomplete"
-    assert "unsupported" not in result.capabilities.values()
+    assert result.capabilities == {"chat": "unknown"}
 
 
 @pytest.mark.asyncio
-async def test_explicit_unsupported_tools_is_classified_on_this_connection(monkeypatch):
+async def test_invalid_credentials_fail_connection_verification(monkeypatch):
+    install_transport(monkeypatch, lambda request: httpx.Response(
+        401, json={"error": {"message": "invalid key"}},
+    ))
+    result = await OpenAICompatibleChatProvider("https://example.test/v1", "secret").test_model("model")
+    assert result.ok is False
+    assert result.status == "failed"
+    assert result.capabilities == {"chat": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_provider_without_tools_can_pass_connection_verification(monkeypatch):
     def handle(request):
         if json.loads(request.content).get("tools"):
             return httpx.Response(400, json={"error": {
@@ -72,9 +75,8 @@ async def test_explicit_unsupported_tools_is_classified_on_this_connection(monke
 
     install_transport(monkeypatch, handle)
     result = await OpenAICompatibleChatProvider("https://example.test/v1", "secret").test_model("model")
-    assert result.status == "unsupported"
-    assert result.capabilities["chat"] == "verified"
-    assert result.capabilities["tool_calling"] == "unsupported"
+    assert result.status == "verified"
+    assert result.capabilities == {"chat": "verified"}
 
 
 @pytest.mark.asyncio

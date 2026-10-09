@@ -9,8 +9,11 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from redis.asyncio import from_url
 from redis.exceptions import WatchError
+from sqlalchemy import select
 
 from ..config import get_settings
+from ..db import session_factory
+from ..models import ChatRun
 from ..temporary.context import TemporaryContextStore
 
 
@@ -68,6 +71,39 @@ class RunCache:
 
     async def clear(self, run_id):
         await self.redis.delete(self.key(run_id), self.key(run_id, "events"))
+
+
+async def fenced_cache_save(cache, run_id, owner, context):
+    # Hold the row lock through the Redis write. Lease reassignment and stop must wait.
+    async with session_factory() as session:
+        current = await session.scalar(select(ChatRun).where(ChatRun.id == run_id).with_for_update())
+        if not current or current.owner != owner or current.status != "running":
+            raise asyncio.CancelledError
+        await cache.save(run_id, context)
+
+
+class FencedPostgresSaver(AsyncPostgresSaver):
+    def __init__(self, conn, run_id, owner):
+        super().__init__(conn)
+        self.run_id, self.owner = run_id, owner
+
+    async def _write_if_owned(self, write):
+        async with session_factory() as session:
+            current = await session.scalar(select(ChatRun).where(ChatRun.id == self.run_id).with_for_update())
+            if not current or current.owner != self.owner or current.status != "running":
+                raise asyncio.CancelledError
+            return await write()
+
+    async def aput(self, config, checkpoint, metadata, new_versions):
+        return await self._write_if_owned(lambda: super(FencedPostgresSaver, self).aput(config, checkpoint, metadata, new_versions))
+
+    async def aput_writes(self, config, writes, task_id, task_path=""):
+        return await self._write_if_owned(lambda: super(FencedPostgresSaver, self).aput_writes(config, writes, task_id, task_path))
+
+    async def adelete_thread(self, thread_id):
+        if thread_id != str(self.run_id):
+            raise asyncio.CancelledError
+        return await self._write_if_owned(lambda: super(FencedPostgresSaver, self).adelete_thread(thread_id))
 
 
 class RuntimeResources:

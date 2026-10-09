@@ -1,13 +1,103 @@
 ﻿# CodeAtlas
 
-CodeAtlas 是面向 ACM/OI 学习者的私人题库与知识库 AI 助教。账号、题库、普通聊天、ACM 分析/解题、长期资料管理与来源引用共用统一学习流程。
+> 面向 ACM/OI 学习者的私人题库与知识库 AI 助教。
+
+CodeAtlas 将账号体系、个人题库、普通聊天、ACM 分析/解题、长期资料管理与来源引用整合为统一的学习工作流。用户可以沉淀题目与学习资料，在对话中获得结合个人知识库的回答，并查看回答所依据的资料来源。
+
+## 核心能力
+
+- **个人题库与学习模式**：管理个人题目，在普通问答、ACM 分析和指定语言的 ACM 解题模式之间切换。
+- **长期知识库**：支持 Markdown、DOCX、TXT、源码和 HTML；文件经异步解析、结构化分块、Embedding 和全文索引后，以原子方式切换为可检索版本。
+- **可追溯的 RAG 回答**：每次聊天执行用户隔离的混合检索，最终答案携带真实来源引用。
+- **会话临时资料**：临时文件全文仅写入独立的非持久 Redis，只用于当前会话，不建立长期索引或写入对象存储。
+- **可靠运行反馈**：SSE 实时推送执行状态；停止、重连与有限恢复由 PostgreSQL 协调，且不持久化私有模型输入和工具结果。
+- **模型配置**：支持 OpenAI 兼容的聊天、Embedding 与可选 Reranker 服务；模型连接通过实际聊天请求检测。
+
+## 技术栈
+
+| 模块 | 技术 |
+| --- | --- |
+| 前端 | Next.js 15、React 19、TypeScript、自定义 CSS |
+| 后端 | Python 3.11+、FastAPI、Pydantic、SQLAlchemy Async |
+| 数据与迁移 | PostgreSQL 16、pgvector、Alembic |
+| 异步任务 | Arq Worker、Redis |
+| Agent 运行时 | LangGraph、PostgreSQL checkpoint（仅控制状态） |
+| 检索与存储 | 混合检索、S3 兼容对象存储、MinIO |
+| 部署 | Docker Compose |
+
+## Docker Compose 部署
+
+### 前置条件
+
+- Docker Engine 24+，并已安装 Docker Compose V2。
+- 可访问 OpenAI 兼容的聊天与 Embedding 模型服务。示例默认使用阿里云百炼兼容接口，也可换为其他兼容服务。
+- `3000`、`8000`、`9000` 与 `9001` 端口可用；如有冲突，请在 `.env` 中修改对应端口。
+
+### 1. 配置环境变量
+
+```powershell
+git clone https://github.com/hezvictor/CodeAtlas.git
+cd CodeAtlas
+Copy-Item .env.example .env
+```
+
+编辑 `.env`，至少替换以下示例值：
+
+```dotenv
+# 使用足够长的随机值。升级已有部署时必须保留原值。
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+MODEL_CREDENTIAL_ENCRYPTION_KEY=replace-with-another-long-random-secret
+
+# OpenAI 兼容模型服务的访问凭证与模型名。
+DASHSCOPE_API_KEY=sk-your-key
+CHAT_MODEL=your-chat-model
+EMBEDDING_MODEL=your-embedding-model
+
+# 与所选 Embedding 模型的输出维度保持一致。
+EMBEDDING_DIMENSIONS=1024
+```
+
+生产环境还应替换 `POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD` 等默认密码。若使用重排序服务，可选填 `RERANKER_BASE_URL`、`RERANKER_API_KEY` 和 `RERANKER_MODEL`。
+
+### 2. 启动服务
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+Compose 会启动前端、FastAPI API、Arq Worker、PostgreSQL/pgvector、持久 Redis、临时 Redis 与 MinIO。后端启动时自动执行 `alembic upgrade head`，Worker 和前端会等待后端健康检查通过。
+
+| 服务 | 地址 |
+| --- | --- |
+| Web 应用 | http://localhost:3000 |
+| OpenAPI 文档 | http://localhost:8000/docs |
+| MinIO 控制台 | http://localhost:9001 |
+
+### 3. 日常运维
+
+```powershell
+# 查看全部服务或指定服务的日志
+docker compose logs -f
+docker compose logs -f backend
+docker compose logs -f worker
+
+# 更新代码后重建服务
+git pull --ff-only
+docker compose up -d --build
+
+# 停止容器并保留数据卷
+docker compose down
+```
+
+不要执行 `docker compose down -v`，该命令会删除 PostgreSQL、Redis 和 MinIO 数据卷。更新已有环境前，请备份数据卷，并保留原 `JWT_SECRET_KEY` 与 `MODEL_CREDENTIAL_ENCRYPTION_KEY`；否则已有登录状态或已保存的模型凭证将无法正常使用。
 
 ## 当前实现
 
 - 长期资料在知识库页面上传：MinIO 原件 → 后台解析、结构分块、Embedding → PostgreSQL/pgvector 与全文索引；完整提交后才切换可检索版本。
-- 每次聊天固定执行一次用户隔离的长期混合检索；LangGraph 单 Agent 可以按需通过两个只读工具补查。不存在手动知识库开关或聊天长期资料关联入口。
-- 临时文件解析全文直接进入当前会话上下文，只放在独立非持久 Redis；不创建知识库文档、版本、索引，不写 MinIO。容量不足明确拒绝。
-- 模型配置实际验证普通聊天、原生工具调用、工具结果回传；三项通过才能进入聊天模型列表。上下文容量需按服务商规格填写。
+- 每次聊天固定执行一次用户隔离的长期混合检索；已验证工具能力的旧模型可以按需通过两个只读工具补查。不存在手动知识库开关或聊天长期资料关联入口。
+- 临时文件解析全文直接进入当前会话上下文，只放在独立非持久 Redis；不创建知识库文档、版本、索引，不写 MinIO。已知容量不足时提前拒绝，容量未知时由服务商判断。
+- 模型配置发送一次普通聊天请求检测连接；通过后即可进入聊天模型列表，无需填写上下文容量。仅旧模型已验证的工具能力可用于补查。
 - SSE 实时显示可折叠执行状态，答案通过引用与临时内容校验后返回；不展示模型隐藏思维链。
 - 后台运行状态及预算由 PostgreSQL 管理；停止、重连和有限恢复跨 API/Worker 实例工作。私有模型输入和工具结果不进入持久检查点。
 
@@ -41,6 +131,6 @@ npm run typecheck
 npm run build
 ```
 
-真实 PostgreSQL/Redis 的隔离测试方式见 [验收记录](docs/agent-rag-acceptance.md)。支持 Markdown、DOCX、TXT、源码和 HTML；本次不新增 PDF/OCR、代码执行、联网搜索、MCP 或多 Agent。测试响应验证调用协议与恢复机制，真实模型的教学质量仍需要单独评测。
+PostgreSQL/Redis 集成测试使用 `infra/compose.agent-test.yml` 的独立测试环境。支持 Markdown、DOCX、TXT、源码和 HTML；项目不提供 PDF 解析，解析器及相关依赖已移除。不支持 OCR、代码执行、联网搜索、MCP 或多 Agent。测试响应验证调用协议与恢复机制，真实模型的教学质量仍需要单独评测。
 
-不要使用 `docker compose down -v` 清理现有环境，该操作会删除数据卷。既有 Docker 数据盘迁移及长期资料验收记录仍保留供查阅。
+不要使用 `docker compose down -v` 清理现有环境，该操作会删除数据卷。历史设计与开发计划保留在 docs/superpowers/；其中路径和测试结果描述的是当时版本，不能直接当作当前执行步骤。

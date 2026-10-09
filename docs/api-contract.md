@@ -4,10 +4,12 @@
 
 账号、用户资料、首页、私人题库、模型连接、会话管理、知识库分组与长期文档接口继续保留。
 
+首页 `GET /dashboard` 的 `today_conversation_count` 按北京时间（UTC+08:00）当天 00:00 至次日 00:00 的 `conversations.created_at` 统计；只包含当前用户。最近会话仍按更新时间排序。
+
 ## 聊天、运行与临时全文
 
 - `POST /conversations/{id}/messages/stream`：请求 `content`、`mode`、`chat_model_id`、可选 `problem_id`、`solution_language`、重试 `reuse_last_user`。普通/ACM 共用运行；可粘贴题面，解题必须指定 cpp/java/python。旧范围与资料关联字段不接受，额外字段返回422。
-- `GET /conversations/{id}/messages?limit=30&before=<ISO日期>`：分页 `{items,has_more,next_before}`。
+- `GET /conversations/{id}/messages?limit=30&before=<消息位置>`：按消息持久顺序分页 `{items,has_more,next_before}`；每条消息包含整数 `position`，`next_before` 是同一序列的整数游标。
 - `POST /conversations/{id}/messages/{message_id}/retry`：准备编辑重试或重新生成历史，再调用消息流；活跃运行409，临时内容持久化限制在修改前检查。
 - `GET /conversations/{id}/runs/active`：共享数据库中的活跃运行快照或 null。
 - `GET /conversations/{id}/runs/{run_id}/stream`：订阅原运行，先快照再安全过程事件，跨实例工作。
@@ -26,17 +28,17 @@
 
 初次检索状态为 no_hit/ok/failed。最终正文先缓冲校验再返回，不推送未校验 token。事件最多128条/24小时；最终消息和状态可从数据库恢复。断线不重新发送问题；重连订阅同一运行并按序号去重。等待补传及终态结束当前订阅。
 
-HTTP 错误使用现有 `{code,message,details}`；SSE失败需从流事件处理，HTTP可能已200。容量未知/不足、输出隐私限制与预算超限都有明确安全错误码。
+HTTP 错误使用现有 `{code,message,details}`；SSE失败需从流事件处理，HTTP可能已200。已知容量不足、输出隐私限制与预算超限都有明确安全错误码；容量未知时由模型服务商判断超限。
 
 ## 模型配置
 
-模型测试依次验证基础聊天、原生工具调用、随机结果回传，记录 `capabilities` 的 chat/tool_calling/tool_result。三项全部 verified 才能设默认或进入 available 列表。连接凭证变化清除验证；检测期间修改连接不能提交旧结果。
+模型测试发送一次普通聊天请求，成功时记录 `capabilities.chat=verified`。聊天连接验证成功即可设默认或进入 available 列表；不检测工具调用或结果回传。连接凭证变化清除验证；检测期间修改连接不能提交旧结果。新检测模型走普通聊天；旧模型保留已验证工具能力时可继续补查。
 
-`PATCH /model-connections/{connection_id}/models/{model_id}` 可修改 `context_window_tokens`，按服务商规格填写；null 表示未知。测试不自动推断容量。网络/限流的 incomplete 与明确 unsupported 区分，失败均不自动切换模型。
+`PATCH /model-connections/{connection_id}/models/{model_id}` 仍兼容修改可选的 `context_window_tokens`；模型配置界面无需填写，测试也不推断容量。已有可信容量可用于提前判断临时文件超限；容量未知时允许发送，超限由服务商返回。网络或限流失败记为 incomplete，失败不自动切换模型。
 
 ## 文档生命周期（2026-09-28）
 
-- `GET /knowledge/documents/policy` 返回服务端支持的扩展名、单文件大小和格式说明，所有上传入口使用同一策略，暂不支持新 PDF。
+- `GET /knowledge/documents/policy` 返回服务端支持的扩展名、单文件大小和格式说明，所有上传入口使用同一策略。项目不提供 PDF 解析；不支持格式的既有原文件仍可下载或删除，不能重试或重新索引。
 - `POST /knowledge/documents/preflight` 接收 `{filename, sha256, group_id}`，返回当前用户目标分组内的冲突文档与 `same_content`。未分组使用 `group_id=null`。
 - `POST /knowledge/documents` 使用 multipart：`file`、可选 `group_id`、`title`、`upload_token`（UUID）、`conflict_action`（`new_version` / `independent`）、`target_document_id`。服务器在锁内再次校验冲突；不同内容且没有明确选择返回 409。相同内容默认返回已有文档。独立文档追加北京时间时间戳并保持扩展名，页面、对象 key 末段、下载名称一致。
 - 202 表示原文件已保存到 MinIO 且后台任务已持久化；不能解释为已经可检索。相同 `upload_token` 重试不会重复创建版本。

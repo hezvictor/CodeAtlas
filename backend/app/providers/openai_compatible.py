@@ -1,13 +1,11 @@
 ﻿from __future__ import annotations
 
 import asyncio
-import json
-import secrets
-from collections.abc import AsyncGenerator
 
 import httpx
 
 from .chat import ModelCandidate, ModelTurn, ProviderTestResult
+from .url_validation import pin_provider_base_url
 
 
 class OpenAICompatibleChatProvider:
@@ -21,8 +19,9 @@ class OpenAICompatibleChatProvider:
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
     async def list_models(self) -> list[ModelCandidate]:
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(f"{self.base_url}/models", headers=self.headers)
+        base_url, host, extensions = pin_provider_base_url(self.base_url)
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+            response = await client.get(f"{base_url}/models", headers={**self.headers, **host}, extensions=extensions)
             response.raise_for_status()
             items = response.json().get("data") or []
         return [ModelCandidate(str(item["id"])) for item in items if item.get("id")]
@@ -32,8 +31,10 @@ class OpenAICompatibleChatProvider:
         body = {"model": model, "messages": messages, "stream": False, "max_tokens": max_tokens}
         if tools:
             body["tools"] = tools
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            request = asyncio.create_task(client.post(f"{self.base_url}/chat/completions", headers=self.headers, json=body))
+        base_url, host, extensions = pin_provider_base_url(self.base_url)
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
+            request = asyncio.create_task(client.post(f"{base_url}/chat/completions", headers={**self.headers, **host},
+                                                      extensions=extensions, json=body))
             stopped = asyncio.create_task(stop_event.wait()) if stop_event else None
             try:
                 if stopped:
@@ -79,92 +80,22 @@ class OpenAICompatibleChatProvider:
                 await asyncio.gather(*(t for t in (request, stopped) if t), return_exceptions=True)
 
     async def test_model(self, model: str) -> ProviderTestResult:
-        capabilities = dict.fromkeys(("chat", "tool_calling", "tool_result"), "unknown")
-        stage = "chat"
+        capabilities = {"chat": "unknown"}
         try:
             basic = await self.complete([{"role": "user", "content": "Reply with OK."}], model, max_tokens=128)
             if not basic.message.get("content"):
                 raise ValueError("基础聊天未返回文本")
-            capabilities[stage] = "verified"
-            stage = "tool_calling"
-            schema = {"type": "function", "function": {
-                "name": "lookup_test_value", "description": "Look up the unknown value for a test key.",
-                "parameters": {"type": "object", "properties": {"key": {"type": "string", "enum": ["probe"]}},
-                               "required": ["key"], "additionalProperties": False},
-            }}
-            messages = [{"role": "user", "content": "Use lookup_test_value with key probe to retrieve its unknown value. Do not guess it."}]
-            turn = await self.complete(messages, model, tools=[schema], max_tokens=256)
-            if len(turn.tool_calls) != 1:
-                raise ValueError("未返回一个有效的原生工具调用")
-            call = turn.tool_calls[0]
-            function = call.get("function") or {}
-            if (not call.get("id") or call.get("type") != "function"
-                    or function.get("name") != "lookup_test_value"
-                    or json.loads(function.get("arguments", "")) != {"key": "probe"}):
-                raise ValueError("工具名称、参数或调用 ID 验证未通过")
-            capabilities[stage] = "verified"
-            stage = "tool_result"
-            value = secrets.token_hex(12)
-            messages.extend([turn.message, {"role": "tool", "tool_call_id": call["id"],
-                                            "content": json.dumps({"value": value})}])
-            final = await self.complete(messages, model, max_tokens=256)
-            if final.tool_calls or value not in str(final.message.get("content") or ""):
-                raise ValueError("工具结果回传验证未通过")
-            capabilities[stage] = "verified"
+            capabilities["chat"] = "verified"
             return ProviderTestResult(True, status="verified", capabilities=capabilities)
         except httpx.HTTPStatusError as error:
             status = error.response.status_code
-            try:
-                detail = error.response.json().get("error") or {}
-            except ValueError:
-                detail = {}
-            unsupported = (status in {400, 422} and stage == "tool_calling"
-                           and detail.get("code") in {"unsupported_parameter", "unsupported_feature"}
-                           and detail.get("param") in {"tools", "tool_choice"})
-            if unsupported:
-                capabilities[stage] = "unsupported"
+            transient = status in {408, 429} or status >= 500
+            if not transient:
+                capabilities["chat"] = "failed"
             return ProviderTestResult(False, f"当前连接验证失败（HTTP {status}）",
-                                      "unsupported" if unsupported else "incomplete", capabilities)
+                                      "incomplete" if transient else "failed", capabilities)
         except httpx.HTTPError:
             return ProviderTestResult(False, "连接超时或网络异常，请重试", "incomplete", capabilities)
         except (ValueError, KeyError, TypeError):
-            capabilities[stage] = "failed"
-            return ProviderTestResult(False, f"{stage} 能力验证未通过", "failed", capabilities)
-
-    async def stream_chat(
-        self, messages: list[dict], model: str, stop_event: asyncio.Event
-    ) -> AsyncGenerator[str, None]:
-        body = {"model": model, "messages": messages, "stream": True}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST", f"{self.base_url}/chat/completions", headers=self.headers, json=body
-            ) as response:
-                response.raise_for_status()
-                lines = response.aiter_lines().__aiter__()
-                while not stop_event.is_set():
-                    next_line = asyncio.create_task(lines.__anext__())
-                    stopped = asyncio.create_task(stop_event.wait())
-                    done, pending = await asyncio.wait(
-                        {next_line, stopped}, return_when=asyncio.FIRST_COMPLETED
-                    )
-                    for task in pending:
-                        task.cancel()
-                    if stopped in done:
-                        break
-                    try:
-                        line = next_line.result()
-                    except StopAsyncIteration:
-                        break
-                    if not line.startswith("data: ") or line[6:] == "[DONE]":
-                        continue
-                    choices = (json.loads(line[6:]).get("choices") or [])
-                    if not choices:
-                        continue
-                    delta = (choices[0].get("delta") or {}).get("content") or ""
-                    if isinstance(delta, list):
-                        delta = "".join(
-                            part.get("text", "") if isinstance(part, dict) else str(part)
-                            for part in delta
-                        )
-                    if delta:
-                        yield str(delta)
+            capabilities["chat"] = "failed"
+            return ProviderTestResult(False, "聊天连接验证未通过", "failed", capabilities)

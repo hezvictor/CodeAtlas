@@ -1,4 +1,11 @@
+import pytest
+
 from app.config import Settings
+
+
+def test_upload_configuration_cannot_enable_formats_without_a_parser():
+    with pytest.raises(ValueError, match="Unsupported document extensions"):
+        Settings(allowed_document_extensions={".md", ".pdf"})
 
 
 def test_knowledge_settings_expose_embedding_and_upload_defaults():

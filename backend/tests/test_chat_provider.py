@@ -1,5 +1,4 @@
 ﻿import asyncio
-import json
 
 import httpx
 
@@ -22,17 +21,11 @@ class _AsyncClient:
         self.requests.append(("POST", url, kwargs))
         return httpx.Response(200, request=httpx.Request("POST", url), json={"choices": [{"message": {"content": "ok"}}]})
 
-    def stream(self, method, url, **kwargs):
-        chunks = [
-            f"data: {json.dumps({'choices': [{'delta': {'content': 'hello'}}]})}\n\n",
-            f"data: {json.dumps({'choices': [{'delta': {'content': ' world'}}]})}\n\n",
-            "data: [DONE]\n\n",
-        ]
-        return httpx.MockTransport(lambda _request: httpx.Response(200, text="".join(chunks)))
-
-
 def test_openai_compatible_provider_discovers_and_tests_models(monkeypatch):
     from app.providers.openai_compatible import OpenAICompatibleChatProvider
+
+    monkeypatch.setattr("app.providers.url_validation.socket.getaddrinfo",
+                        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))])
 
     client = _AsyncClient()
     monkeypatch.setattr("app.providers.openai_compatible.httpx.AsyncClient", lambda **_: client)
@@ -44,50 +37,12 @@ def test_openai_compatible_provider_discovers_and_tests_models(monkeypatch):
     candidates, result = asyncio.run(run())
 
     assert [item.name for item in candidates] == ["model-a", "model-b"]
-    assert result.ok is False
-    assert result.capabilities["tool_calling"] == "failed"
+    assert result.ok is True
+    assert result.capabilities == {"chat": "verified"}
     assert client.requests[0][1].endswith("/models")
+    assert client.requests[0][1].startswith("https://93.184.216.34/")
+    assert client.requests[0][2]["headers"]["Host"] == "provider.example"
+    assert client.requests[0][2]["extensions"]["sni_hostname"] == "provider.example"
     assert client.requests[1][2]["headers"]["Authorization"] == "Bearer secret"
-
-
-def test_openai_compatible_provider_streams_text_deltas(monkeypatch):
-    from app.providers.openai_compatible import OpenAICompatibleChatProvider
-
-    class StreamResponse:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        async def aiter_lines(self):
-            yield 'data: {"choices":[{"delta":{"content":"hello"}}]}'
-            yield 'data: {"choices":[{"delta":{"content":" world"}}]}'
-            yield "data: [DONE]"
-
-    class StreamContext:
-        async def __aenter__(self):
-            return StreamResponse()
-
-        async def __aexit__(self, *_exc):
-            return False
-
-    class Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_exc):
-            return False
-
-        def stream(self, *_args, **_kwargs):
-            return StreamContext()
-
-    monkeypatch.setattr("app.providers.openai_compatible.httpx.AsyncClient", lambda **_: Client())
-    provider = OpenAICompatibleChatProvider("https://provider.example/v1", "secret")
-    stop_event = asyncio.Event()
-
-    async def run():
-        return [delta async for delta in provider.stream_chat([{"role": "user", "content": "hi"}], "model-a", stop_event)]
-
-    result = asyncio.run(run())
-
-    assert result == ["hello", " world"]
+    assert len(client.requests) == 2
+    assert "tools" not in client.requests[1][2]["json"]

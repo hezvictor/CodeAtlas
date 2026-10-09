@@ -1,5 +1,22 @@
+import pytest
+
 from app.chunking import chunk_document
 from app.parsers import parse_document
+
+
+@pytest.mark.parametrize("filename,mime", [
+    ("notes.pdf", "application/pdf"),
+    ("notes.pdf", "text/plain"),
+    ("notes.exe", "text/plain"),
+])
+def test_parser_rejects_unsupported_formats_before_reading_content(filename, mime):
+    with pytest.raises(ValueError, match="Unsupported document type"):
+        parse_document(filename, mime, b"This content could be mistaken for plain text")
+
+
+def test_parser_rejects_unsupported_mime_for_a_supported_extension():
+    with pytest.raises(ValueError, match="MIME type does not match"):
+        parse_document("notes.txt", "application/pdf", b"Plain text")
 
 
 def test_html_parser_removes_scripts_and_preserves_headings():

@@ -2,7 +2,6 @@
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.schemas import ChatRequest, ConversationCreate
@@ -20,12 +19,12 @@ def test_conversation_rejects_removed_control():
 
 
 @pytest.mark.asyncio
-async def test_ordinary_verified_model_cannot_bypass_agent_admission():
+async def test_chat_verified_model_can_be_used_without_tool_capability():
     from app.routers.conversations import resolve_chat_model
 
-    model = SimpleNamespace(status="verified", capabilities={})
+    model = SimpleNamespace(status="verified", capabilities={"chat": "verified"})
+    connection = SimpleNamespace()
     class Session:
         async def execute(self, statement):
-            return SimpleNamespace(first=lambda: (model, SimpleNamespace()))
-    with pytest.raises(HTTPException):
-        await resolve_chat_model(Session(), SimpleNamespace(selected_chat_model_id=None), uuid4(), uuid4())
+            return SimpleNamespace(first=lambda: (model, connection))
+    assert await resolve_chat_model(Session(), SimpleNamespace(selected_chat_model_id=None), uuid4(), uuid4()) == (model, connection)

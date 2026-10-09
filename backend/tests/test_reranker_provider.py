@@ -3,6 +3,8 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_reranker_returns_document_scores_in_provider_order(monkeypatch):
+    monkeypatch.setattr("app.providers.url_validation.socket.getaddrinfo",
+                        lambda *_args, **_kwargs: [(2, 1, 6, "", ("93.184.216.34", 80))])
     from app.providers.reranker import RerankerProvider
 
     class Response:

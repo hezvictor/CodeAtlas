@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -36,7 +35,3 @@ class ChatProvider(Protocol):
 
     async def complete(self, messages: list[dict], model: str, *, tools: list[dict] | None = None,
                        stop_event: asyncio.Event | None = None, max_tokens: int = 4096) -> ModelTurn: ...
-
-    def stream_chat(
-        self, messages: list[dict], model: str, stop_event: asyncio.Event
-    ) -> AsyncGenerator[str, None]: ...

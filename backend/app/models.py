@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     String,
@@ -61,8 +62,10 @@ class Conversation(Base):
 
 class Message(Base):
     __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_conversation_position", "conversation_id", "position"),)
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
     role: Mapped[str] = mapped_column(String(20))
     content: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String(20), default="completed")

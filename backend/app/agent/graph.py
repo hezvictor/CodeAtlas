@@ -30,6 +30,7 @@ class AgentRuntime:
     search: Callable[[str, int], Awaitable[dict]]
     read: Callable[[str, int], Awaitable[dict]]
     capacity: int | None = None
+    allow_tools: bool = True
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     max_models: int = 4
     max_tools: int = 4
@@ -52,7 +53,7 @@ async def model_node(state: ControlState, runtime: Runtime[AgentRuntime]):
         context["answer"] = "已达到本次运行预算，现有资料不足以继续处理。"
         await ctx.save(context)
         return {"done": True, "has_tools": False}
-    offer_tools = (state.get("tool_rounds", 0) < ctx.max_rounds
+    offer_tools = (ctx.allow_tools and state.get("tool_rounds", 0) < ctx.max_rounds
                    and state.get("tool_calls", 0) < ctx.max_tools
                    and state.get("model_calls", 0) < ctx.max_models - 1)
     tools = TOOL_SCHEMAS if offer_tools else []

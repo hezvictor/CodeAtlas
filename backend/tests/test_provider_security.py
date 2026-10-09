@@ -42,6 +42,22 @@ def test_provider_url_rejects_domain_resolving_to_private_address(monkeypatch):
         validate_provider_base_url("https://model.example/v1")
 
 
+def test_provider_rechecks_dns_and_pins_validated_connection_address(monkeypatch):
+    from app.providers.url_validation import pin_provider_base_url, validate_provider_base_url
+
+    addresses = iter(["93.184.216.34", "10.0.0.8", "93.184.216.34"])
+    monkeypatch.delenv("CODEATLAS_ALLOW_LOCAL_PROVIDER_URLS", raising=False)
+    monkeypatch.setattr("app.providers.url_validation.socket.getaddrinfo",
+                        lambda *_args, **_kwargs: [(2, 1, 6, "", (next(addresses), 443))])
+    url = validate_provider_base_url("https://model.example/v1")
+    with pytest.raises(ValueError, match="private network"):
+        pin_provider_base_url(url)
+    pinned, headers, extensions = pin_provider_base_url(url)
+    assert pinned == "https://93.184.216.34/v1"
+    assert headers == {"Host": "model.example"}
+    assert extensions == {"sni_hostname": "model.example"}
+
+
 def test_production_provider_url_requires_https(monkeypatch):
     from app.providers.url_validation import validate_provider_base_url
 

@@ -67,4 +67,4 @@ Files: shared `Navbar.tsx`, knowledge summary hook, API/docs/tests.
 - [x] Update README and API/development baseline; inspect diff and report verified results and any remaining limitations.
 
 ## Completion record
-Completed 2026-09-28: backend 149 passing tests with PostgreSQL integration; frontend 37 passing tests. Real MinIO/DashScope and browser acceptance: docs/knowledge-ingestion-acceptance-2026-09-28.md.
+Completed 2026-09-28: backend 149 passing tests with PostgreSQL integration; frontend 37 passing tests.

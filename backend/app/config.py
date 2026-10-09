@@ -3,6 +3,14 @@
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DOCUMENT_MIME_TYPES = {
+    ".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain",
+    ".html": "text/html", ".htm": "text/html", ".py": "text/x-python",
+    ".java": "text/x-java-source", ".c": "text/x-c", ".cc": "text/x-c++src",
+    ".cpp": "text/x-c++src", ".h": "text/x-c", ".hpp": "text/x-c++hdr",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
 
 def validate_embedding_dimension(configured: int, database_type: str) -> None:
     expected = f"vector({configured})"
@@ -59,13 +67,18 @@ class Settings(BaseSettings):
     chat_history_max_chars: int = 60_000
     rag_context_max_chars: int = 40_000
     avatar_max_size_bytes: int = 2 * 1024 * 1024
-    allowed_document_extensions: set[str] = {
-        ".md", ".markdown", ".docx", ".txt", ".c", ".cc", ".cpp", ".h", ".hpp",
-        ".java", ".py", ".html", ".htm",
-    }
+    allowed_document_extensions: set[str] = set(DOCUMENT_MIME_TYPES)
     frontend_url: str = "http://localhost:3000"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+
+    @field_validator("allowed_document_extensions")
+    @classmethod
+    def validate_document_extensions(cls, value: set[str]) -> set[str]:
+        unsupported = value - DOCUMENT_MIME_TYPES.keys()
+        if unsupported:
+            raise ValueError(f"Unsupported document extensions: {', '.join(sorted(unsupported))}")
+        return value
 
     @field_validator("jwt_secret_key")
     @classmethod

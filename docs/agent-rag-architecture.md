@@ -72,9 +72,9 @@ sequenceDiagram
     U->>A: 发送消息
     W->>R: 读取当前会话完整文本
     W->>W: 预算校验（无截断）
-    alt 容量已知且足够
+    alt 容量已知且足够，或容量未知
         W->>M: 全文、历史、题面与知识证据
-    else 超容量或容量未知
+    else 已知容量不足
         W-->>U: 明确失败，选择更大容量模型或减少上下文
     end
     U->>A: 移除文件或删除会话
@@ -206,9 +206,9 @@ stateDiagram-v2
 
 ## 运行前准备与验证边界
 
-API/Worker 启动不自动创建检查点表，容器启动也不自动迁移。真实环境需先备份并明确批准执行 `alembic upgrade head`，再启动新服务。需要独立的 `EPHEMERAL_REDIS_URL`；不能使用队列 Redis 的另一个逻辑 DB，且启动会验证 `appendonly=no` 与 `save=''`。Compose 配置无临时数据卷、内存上限256MB、`noeviction`。外部部署的日志代理也应排除临时文件 URL 与请求头/正文。
+LangGraph 运行时不会自行创建检查点表，检查点 schema 由 Alembic 迁移管理。Docker/Compose 后端容器启动时先执行 `alembic upgrade head`；迁移失败则 API 不启动。已有数据升级前先备份。Windows/Linux 原生启动不会自动迁移，须先手动执行 `alembic upgrade head`。需要独立的 `EPHEMERAL_REDIS_URL`；不能使用队列 Redis 的另一个逻辑 DB，且启动会验证 `appendonly=no` 与 `save=''`。Compose 配置无临时数据卷、内存上限256MB、`noeviction`。外部部署的日志代理也应排除临时文件 URL 与请求头/正文。
 
-原先只验证普通聊天的模型需重新完成工具检测。检测使用随机、事先未知的结果回传，验证的是当前连接与模型组合，不是模型名称白名单；网络/限流失败记为检测未完成，不能推断永久不支持。上下文容量须按该连接服务商的规格填写，能力检测不证明容量。当前支持 OpenAI 兼容接口的原生工具协议，不采用文字模拟工具或自动切换模型。
+模型连接检测只发送一次普通聊天请求，验证当前连接与模型组合；网络或限流失败记为检测未完成。无需填写上下文容量；已知容量继续用于提前拦截超限，未知容量交由服务商判断。新检测的模型只走普通聊天，旧模型已验证的原生工具能力仍可用于补查，不采用文字模拟工具或自动切换模型。
 
 Windows 原生 Worker 使用 `uv run python -m app.worker_runner`；API 使用 `uv run python -m app.api_runner`，均使用 SelectorEventLoop。Docker/Linux 使用原有 Uvicorn/Arq 入口。LangGraph 与 PostgreSQL saver 固定版本，调整版本需连同检查点 schema 评审。
 

@@ -220,7 +220,7 @@ async def test_model(connection_id: uuid.UUID, model_id: uuid.UUID, user_id=Depe
         result = await OpenAICompatibleChatProvider(connection.base_url, key).test_model(model.name)
     except Exception:
         from ..providers.chat import ProviderTestResult
-        result = ProviderTestResult(False, "连接配置或能力验证暂时不可用", "incomplete")
+        result = ProviderTestResult(False, "连接暂时不可用", "incomplete")
     await session.refresh(connection, with_for_update=True)
     if connection.status != "active" or credentials != (connection.base_url, connection.api_key_ciphertext, connection.api_key_nonce):
         from ..providers.chat import ProviderTestResult
@@ -252,9 +252,7 @@ async def available_models(user_id=Depends(current_user_id), session: AsyncSessi
         select(ChatModel, ModelConnection)
         .join(ModelConnection, ChatModel.connection_id == ModelConnection.id)
         .where(ModelConnection.user_id == user_id, ModelConnection.status == "active", ChatModel.status == "verified",
-               ChatModel.capabilities["tool_calling"].as_string() == "verified",
-               ChatModel.capabilities["chat"].as_string() == "verified",
-               ChatModel.capabilities["tool_result"].as_string() == "verified")
+               ChatModel.capabilities["chat"].as_string() == "verified")
         .order_by(ModelConnection.name, ChatModel.name)
     )
     return [model_response(model, connection, model.id == getattr(user, "default_chat_model_id", None)) for model, connection in rows.all()]
@@ -262,7 +260,7 @@ async def available_models(user_id=Depends(current_user_id), session: AsyncSessi
 
 def model_is_chat_ready(model: ChatModel) -> bool:
     capabilities = model.capabilities or {}
-    return model.status == "verified" and all(capabilities.get(key) == "verified" for key in ("chat", "tool_calling", "tool_result"))
+    return model.status == "verified" and capabilities.get("chat") == "verified"
 
 
 @router.patch("/{connection_id}/models/{model_id}", response_model=ChatModelResponse)
@@ -347,7 +345,7 @@ async def test_embedding_config(user_id=Depends(current_user_id), session: Async
                 select(DocumentJob)
                 .join(DocumentVersion, DocumentJob.document_version_id == DocumentVersion.id)
                 .join(Document, DocumentVersion.document_id == Document.id)
-                .where(Document.user_id == user_id, Document.scope == "long_term", Document.deleted_at.is_(None), DocumentJob.status == "waiting_embedding", DocumentVersion.extension != ".pdf", DocumentVersion.cleanup_pending.is_(False))
+                .where(Document.user_id == user_id, Document.scope == "long_term", Document.deleted_at.is_(None), DocumentJob.status == "waiting_embedding", DocumentVersion.extension.in_(get_settings().allowed_document_extensions), DocumentVersion.cleanup_pending.is_(False))
             )
         ).all()
         for job in pending_jobs:
@@ -378,15 +376,19 @@ async def get_reranker_config(user_id=Depends(current_user_id), session: AsyncSe
 async def update_reranker_config(payload: RerankerConfigUpdate, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
     try:
         base_url = validate_provider_base_url(payload.base_url)
-        secret = encrypt_secret(payload.api_key)
+        secret = encrypt_secret(payload.api_key) if payload.api_key is not None else None
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     config = await session.scalar(select(RerankerConfig).where(RerankerConfig.user_id == user_id))
     if not config:
+        if secret is None:
+            raise HTTPException(422, "Reranker API key is required for a new configuration")
         config = RerankerConfig(user_id=user_id, base_url=base_url, api_key_ciphertext=secret.ciphertext, api_key_nonce=secret.nonce, model_name=payload.model_name)
         session.add(config)
     else:
-        config.base_url, config.api_key_ciphertext, config.api_key_nonce, config.model_name = base_url, secret.ciphertext, secret.nonce, payload.model_name
+        config.base_url, config.model_name = base_url, payload.model_name
+        if secret is not None:
+            config.api_key_ciphertext, config.api_key_nonce = secret.ciphertext, secret.nonce
         config.status, config.verification_error, config.last_tested_at = "unverified", None, None
     await session.commit()
     await session.refresh(config)

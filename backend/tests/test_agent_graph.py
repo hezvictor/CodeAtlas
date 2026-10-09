@@ -77,3 +77,25 @@ async def test_invalid_and_repeated_tools_are_bounded():
     assert len(calls) <= 4
     assert state["tool_calls"] <= 4
     assert transcript["answer"] == "Insufficient evidence"
+
+
+@pytest.mark.asyncio
+async def test_unprobed_model_answers_without_offering_tools():
+    from app.agent.graph import AgentRuntime, build_graph
+
+    transcript = {"messages": [{"role": "user", "content": "q"}]}
+    async def load(): return transcript
+    async def save(value): transcript.update(value)
+    async def emit(*args): pass
+    async def forbidden(*args): raise AssertionError("tool should not run")
+    class Provider:
+        async def complete(self, messages, model, **kwargs):
+            assert kwargs["tools"] is None
+            return ModelTurn({"role": "assistant", "content": "plain answer"})
+
+    runtime = AgentRuntime(Provider(), "m", load, save, emit, forbidden, forbidden, allow_tools=False)
+    await build_graph(InMemorySaver()).ainvoke(
+        {"model_calls": 0, "tool_calls": 0, "tool_rounds": 0},
+        {"configurable": {"thread_id": "plain"}}, context=runtime,
+    )
+    assert transcript["answer"] == "plain answer"

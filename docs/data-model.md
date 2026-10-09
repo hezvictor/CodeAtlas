@@ -7,7 +7,7 @@
 | users / refresh_tokens | 账号、资料、令牌与默认模型 |
 | problems | 用户拥有的题面；注册时复制默认题目；删除题目不会删除历史消息 |
 | conversations / messages | 会话、模式、合规用户输入、通过校验的最终回答；停止不保存未校验半成品 |
-| model_connections / chat_models | 加密凭证、模型名、三项能力结果与可选上下文容量 |
+| model_connections / chat_models | 加密凭证、模型名、聊天连接检测结果与兼容保留的可选上下文容量 |
 | embedding_configs / reranker_configs | 用户检索模型配置 |
 | knowledge_groups / documents / document_versions | 长期资料组织、版本、有效索引 generation、处理与删除状态 |
 | document_chunks | 长期正文分块、位置、pgvector 向量、全文检索字段 |

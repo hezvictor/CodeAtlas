@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config import get_settings
+from ..config import DOCUMENT_MIME_TYPES, get_settings
 from ..db import get_session
 from ..dependencies import current_user_id
 from ..models import Document, DocumentJob, DocumentVersion, KnowledgeGroup
@@ -27,13 +27,22 @@ from ..storage.s3 import S3Storage, object_key_for
 router = APIRouter(prefix="/knowledge/documents", tags=["knowledge"])
 logger = logging.getLogger(__name__)
 
-_MIME_BY_EXTENSION = {
-    ".md": "text/markdown", ".markdown": "text/markdown", ".txt": "text/plain",
-    ".html": "text/html", ".htm": "text/html", ".py": "text/x-python",
-    ".java": "text/x-java-source", ".c": "text/x-c", ".cc": "text/x-c++src",
-    ".cpp": "text/x-c++src", ".h": "text/x-c", ".hpp": "text/x-c++hdr",
-    ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
+
+async def _discard_uncommitted_upload(session: AsyncSession, storage: S3Storage, key: str, version_id: uuid.UUID) -> None:
+    # A failed commit can have reached PostgreSQL. Delete only after a fresh read
+    # proves that no durable version points at the object.
+    try:
+        await session.rollback()
+        committed = await session.scalar(select(DocumentVersion.id).where(DocumentVersion.id == version_id))
+    except Exception:
+        logger.exception("upload commit outcome could not be verified", extra={"version_id": str(version_id)})
+        return
+    if committed:
+        return
+    try:
+        await storage.delete(key)
+    except Exception:
+        logger.exception("uncommitted upload cleanup failed", extra={"version_id": str(version_id)})
 
 _FORMAT_DESCRIPTION = "支持 Markdown、DOCX、TXT、C/C++、Java、Python、HTML 文件"
 
@@ -42,7 +51,7 @@ def upload_policy() -> dict:
     """Return the effective upload policy used by server-side validation."""
     settings = get_settings()
     return {
-        "extensions": sorted(settings.allowed_document_extensions - {".pdf"}),
+        "extensions": sorted(settings.allowed_document_extensions),
         "max_size_bytes": settings.max_upload_size_bytes,
         "format_description": _FORMAT_DESCRIPTION,
     }
@@ -171,17 +180,15 @@ async def acknowledge_jobs(payload: JobAcknowledgement, user_id=Depends(current_
 def _validate_upload(filename: str, content_type: str | None, data: bytes) -> tuple[str, str]:
     extension = PurePath(filename).suffix.lower()
     settings = get_settings()
-    if extension == ".pdf" or extension not in settings.allowed_document_extensions:
+    if extension not in settings.allowed_document_extensions:
         raise _upload_error(400, "UNSUPPORTED_EXTENSION", f"不支持 {extension or '该'} 文件格式", "Unsupported document type")
     if len(data) > settings.max_upload_size_bytes:
         raise _upload_error(413, "FILE_TOO_LARGE", f"文件大小不能超过 {settings.max_upload_size_bytes} 字节", "Document is too large")
     declared = content_type or "application/octet-stream"
-    expected = _MIME_BY_EXTENSION.get(extension, declared)
+    expected = DOCUMENT_MIME_TYPES[extension]
     if declared != "application/octet-stream" and declared != expected:
         if not (expected.startswith("text/") and declared.startswith("text/")):
             raise _upload_error(400, "MIME_MISMATCH", "文件类型与扩展名不匹配", "MIME type does not match file extension")
-    if extension == ".pdf" and not data.startswith(b"%PDF"):
-        raise _upload_error(400, "INVALID_FILE_HEADER", "文件头不是有效的 PDF", "Uploaded file is not a valid PDF")
     if extension == ".docx" and not data.startswith(b"PK"):
         raise _upload_error(400, "INVALID_FILE_HEADER", "文件头不是有效的 DOCX", "Uploaded file is not a valid DOCX")
     if extension in {".html", ".htm"} and b"<" not in data[:4096]:
@@ -271,8 +278,12 @@ async def upload_document(
     job = DocumentJob(document_version_id=version.id, stage="parsing", status="queued", attempts=0)
     session.add(job)
     storage = S3Storage()
-    await storage.put_bytes(key, data, mime_type)
-    await session.commit()
+    try:
+        await storage.put_bytes(key, data, mime_type)
+        await session.commit()
+    except Exception:
+        await _discard_uncommitted_upload(session, storage, key, version.id)
+        raise
     await session.refresh(document)
     try:
         await dispatch_document_job(str(job.id))
@@ -308,10 +319,15 @@ async def _upload_version(document: Document, file: UploadFile, title: str | Non
     job = DocumentJob(document_version_id=version.id, stage="parsing", status="queued", attempts=0)
     session.add(job)
     document.filename = filename
-    await S3Storage().put_bytes(key, data, mime_type)
+    storage = S3Storage()
     if title and title.strip():
         document.title = title.strip()[:200]
-    await session.commit()
+    try:
+        await storage.put_bytes(key, data, mime_type)
+        await session.commit()
+    except Exception:
+        await _discard_uncommitted_upload(session, storage, key, version.id)
+        raise
     try:
         await dispatch_document_job(str(job.id))
     except Exception:
@@ -382,7 +398,7 @@ async def _reset_latest(document_id: uuid.UUID, user_id: uuid.UUID, session: Asy
     version = await session.get(DocumentVersion, document.current_version_id) if use_current and document.current_version_id else await latest_version(document, session)
     if not version:
         raise HTTPException(404, "Document version not found")
-    if version.extension == ".pdf" or version.storage_deleted_at or version.cleanup_pending:
+    if version.extension not in get_settings().allowed_document_extensions or version.storage_deleted_at or version.cleanup_pending:
         raise HTTPException(409, "当前文件不支持重新处理")
     if version.status != "indexed":
         version.status = "queued"
