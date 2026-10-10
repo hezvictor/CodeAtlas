@@ -12,7 +12,6 @@ from ..parsers import parse_document
 from ..providers.embedding import (
     UserEmbeddingProvider,
     processing_error,
-    project_embedding_is_configured,
 )
 from ..services.document_lifecycle import lock_document, purge_chunks
 from ..storage.s3 import S3Storage
@@ -110,7 +109,7 @@ async def process_document(_ctx, job_id: str) -> dict:
         job.completed_chunks, job.total_chunks = 0, 0
         supported = version.extension in get_settings().allowed_document_extensions
         config = await session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == document.user_id))
-        if supported and ((config and config.status != "verified") or (not config and not project_embedding_is_configured())):
+        if supported and (not config or config.status != "verified"):
             _stage(version, job, "waiting_embedding")
             job.status, job.locked_at, job.locked_by = "waiting_embedding", None, None
             job.attempts -= 1

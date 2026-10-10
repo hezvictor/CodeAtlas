@@ -5,7 +5,6 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.graph import AgentRuntime, build_graph
-from app.config import Settings
 from app.providers.chat import ModelTurn
 from app.providers.embedding import UserEmbeddingProvider
 
@@ -18,9 +17,14 @@ async def test_query_embedding_does_not_hide_extra_retries_from_tool_budget(monk
         return httpx.Response(429, json={"error": {"message": "limited"}})
     client = httpx.AsyncClient
     monkeypatch.setattr("app.providers.embedding.httpx.AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handler), **kwargs))
-    monkeypatch.setattr("app.providers.embedding.get_settings", lambda: Settings(dashscope_api_key="fake-only"))
+
     class Session:
         async def scalar(self, _): return None
+
+    async def credentials(self):
+        return "fake-only", "model"
+
+    monkeypatch.setattr(UserEmbeddingProvider, "_credentials", credentials)
     with pytest.raises(httpx.HTTPStatusError):
         await UserEmbeddingProvider(Session(), "test-user").embed_query("query")
     assert len(requests) == 1

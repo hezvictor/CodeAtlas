@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Document, DocumentChunk, DocumentVersion
-from ..providers.embedding import EmbeddingProvider
+from ..providers.embedding import UserEmbeddingProvider
 from ..retrieval import RankedChunk, assemble_neighbor_context, rerank_chunks_async, rrf_merge
 
 
@@ -38,7 +38,7 @@ async def retrieve_chunks(session: AsyncSession, user_id: UUID, query: str, limi
     if not await session.scalar(authorized_chunks(user_id).limit(1)):
         return []
     keyword, vector = [], []
-    provider = embedding_provider or EmbeddingProvider()
+    provider = embedding_provider or UserEmbeddingProvider(session, user_id)
     for search_query in list(dict.fromkeys([query, *(queries or [])]))[:3]:
         tsquery = func.plainto_tsquery("simple", search_query)
         rows = (await session.scalars(authorized_chunks(user_id).where(

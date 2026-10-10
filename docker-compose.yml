@@ -3,21 +3,21 @@
     build: ./backend
     container_name: codeatlas-backend
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-codeatlas}:${POSTGRES_PASSWORD:-codeatlas-dev-password}@postgres:5432/${POSTGRES_DB:-codeatlas}
       REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
       EPHEMERAL_REDIS_URL: redis://redis-ephemeral:6379/0
       S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set}
+      S3_BUCKET: ${S3_BUCKET:-codeatlas-documents}
       AVATAR_BUCKET: ${AVATAR_BUCKET:-codeatlas-avatars}
       BROWSER_S3_ENDPOINT: ${BROWSER_S3_ENDPOINT:-http://localhost:9000}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in .env}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-codeatlas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-codeatlas-dev-password}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-codeatlas-local-development-jwt-secret}
+      MODEL_CREDENTIAL_ENCRYPTION_KEY: ${MODEL_CREDENTIAL_ENCRYPTION_KEY:-codeatlas-local-model-credential-key}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
-      CHAT_MODEL: ${CHAT_MODEL}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     ports: ["8000:8000"]
     depends_on:
@@ -36,22 +36,22 @@
       dockerfile: Dockerfile.test
     profiles: ["test"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       CODEATLAS_COMPOSE_FILE: /workspace/docker-compose.yml
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-codeatlas}:${POSTGRES_PASSWORD:-codeatlas-dev-password}@postgres:5432/${POSTGRES_DB:-codeatlas}
       REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
       EPHEMERAL_REDIS_URL: redis://redis-ephemeral:6379/0
       S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set}
+      S3_BUCKET: ${S3_BUCKET:-codeatlas-documents}
       AVATAR_BUCKET: ${AVATAR_BUCKET:-codeatlas-avatars}
       BROWSER_S3_ENDPOINT: ${BROWSER_S3_ENDPOINT:-http://localhost:9000}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set in .env}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-codeatlas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-codeatlas-dev-password}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-codeatlas-local-development-jwt-secret}
+      MODEL_CREDENTIAL_ENCRYPTION_KEY: ${MODEL_CREDENTIAL_ENCRYPTION_KEY:-codeatlas-local-model-credential-key}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
-      CHAT_MODEL: ${CHAT_MODEL}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     depends_on:
       postgres: {condition: service_healthy}
@@ -65,16 +65,21 @@
     build: ./backend
     container_name: codeatlas-worker
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-codeatlas}:${POSTGRES_PASSWORD:-codeatlas-dev-password}@postgres:5432/${POSTGRES_DB:-codeatlas}
       REDIS_URL: redis://redis:${REDIS_PORT:-6379}/0
       EPHEMERAL_REDIS_URL: redis://redis-ephemeral:6379/0
       S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET must be set}
+      S3_BUCKET: ${S3_BUCKET:-codeatlas-documents}
+      AVATAR_BUCKET: ${AVATAR_BUCKET:-codeatlas-avatars}
+      BROWSER_S3_ENDPOINT: ${BROWSER_S3_ENDPOINT:-http://localhost:9000}
       S3_REGION: us-east-1
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-codeatlas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-codeatlas-dev-password}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-codeatlas-local-development-jwt-secret}
+      MODEL_CREDENTIAL_ENCRYPTION_KEY: ${MODEL_CREDENTIAL_ENCRYPTION_KEY:-codeatlas-local-model-credential-key}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
     command: ["arq", "app.worker.WorkerSettings"]
     depends_on:
@@ -96,12 +101,12 @@
     image: pgvector/pgvector@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     container_name: codeatlas-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-codeatlas}
+      POSTGRES_USER: ${POSTGRES_USER:-codeatlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codeatlas-dev-password}
     expose: ["5432"]
     volumes: [postgres_data:/var/lib/postgresql/data]
-    healthcheck: {test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"], interval: 5s, timeout: 5s, retries: 10}
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-codeatlas} -d ${POSTGRES_DB:-codeatlas}"], interval: 5s, timeout: 5s, retries: 10}
   redis:
     image: redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
     container_name: codeatlas-redis
@@ -120,8 +125,8 @@
     image: codeatlas-minio:RELEASE.2025-10-15T17-29-55Z
     container_name: codeatlas-minio
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-codeatlas}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-codeatlas-dev-password}
     ports: ["${MINIO_API_PORT:-9000}:9000", "${MINIO_CONSOLE_PORT:-9001}:9001"]
     volumes: [minio_data:/data]
     command: server /data --console-address ":9001"

@@ -25,13 +25,11 @@ from ..models import (
     ChatModel,
     ChatRun,
     Conversation,
-    EmbeddingConfig,
     Message,
     ModelConnection,
     RerankerConfig,
     User,
 )
-from ..providers.embedding import project_embedding_is_configured
 from ..schemas import (
     BulkConversationRequest,
     ChatRequest,
@@ -76,14 +74,6 @@ async def resolve_chat_model(session: AsyncSession, conversation: Conversation, 
         if requested_id or getattr(conversation, "selected_chat_model_id", None):
             raise HTTPException(409, "Selected chat model is unavailable")
     raise HTTPException(409, "Please configure and verify a chat model before sending")
-
-
-def embedding_config_is_verified(config: EmbeddingConfig | None) -> bool:
-    return config is not None and config.status == "verified"
-
-
-def embedding_is_available(config: EmbeddingConfig | None) -> bool:
-    return embedding_config_is_verified(config) or (config is None and project_embedding_is_configured(get_settings()))
 
 
 async def _resolve_reranker(session: AsyncSession, user_id: UUID, config: RerankerConfig | None):

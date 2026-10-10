@@ -12,6 +12,11 @@ from ..models import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
 
+# Embedding 固定使用百炼兼容接口与 1024 维模型；凭证只能由用户在页面上提供，
+# 不存在"项目默认"环境变量回退通道。
+EMBEDDING_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+EMBEDDING_MODEL = "text-embedding-v3"
+
 
 def embedding_batch_limit(model: str, configured: int) -> int:
     limit = 10 if model in {"text-embedding-v3", "text-embedding-v4"} else 25
@@ -64,11 +69,6 @@ def processing_error(error: Exception) -> tuple[str, str, bool]:
     return "DOCUMENT_PROCESSING_FAILED", "文档处理失败，请重试或联系管理员", False
 
 
-def project_embedding_is_configured(settings=None) -> bool:
-    settings = settings or get_settings()
-    return bool(getattr(settings, "dashscope_api_key", "") and getattr(settings, "embedding_model", ""))
-
-
 def validate_embedding_vectors(vectors: list[list[float]], expected_count: int, dimensions: int) -> list[list[float]]:
     if len(vectors) != expected_count:
         raise ValueError(f"embedding count mismatch: expected {expected_count}, got {len(vectors)}")
@@ -83,7 +83,7 @@ def _batches(values: list[str], size: int):
 
 
 class EmbeddingProvider:
-    async def _embed_batches(self, texts: list[str], *, api_key: str, model: str, settings) -> list[list[float]]:
+    async def _embed_batches(self, texts: list[str], *, api_key: str, model: str, base_url: str, settings) -> list[list[float]]:
         if not texts:
             return []
         max_chars = max(1, int(getattr(settings, "embedding_max_input_chars", 12000)))
@@ -103,7 +103,7 @@ class EmbeddingProvider:
                     started = time.monotonic()
                     try:
                         response = await client.post(
-                            settings.dashscope_base_url.rstrip("/") + "/embeddings",
+                            base_url.rstrip("/") + "/embeddings",
                             headers={"Authorization": f"Bearer {api_key}"},
                             json=body,
                         )
@@ -130,47 +130,29 @@ class EmbeddingProvider:
                 vectors.extend(validate_embedding_vectors(batch_vectors, len(batch), settings.embedding_dimensions))
         return vectors
 
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        settings = get_settings()
-        if not settings.dashscope_api_key or not settings.embedding_model:
-            raise RuntimeError("embedding provider is not configured")
-        return await self._embed_batches(texts, api_key=settings.dashscope_api_key, model=settings.embedding_model, settings=settings)
-
-    async def embed_query(self, text: str) -> list[float]:
-        vectors = await self.embed_documents([text])
-        return vectors[0]
-
 
 class UserEmbeddingProvider(EmbeddingProvider):
     def __init__(self, session: AsyncSession, user_id):
         self.session = session
         self.user_id = user_id
 
-    async def _config(self) -> EmbeddingConfig | None:
+    async def _credentials(self) -> tuple[str, str]:
+        """Resolve the user's own embedding credential; there is no project-level fallback."""
         config = await self.session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == self.user_id))
-        return config
+        if config is None:
+            raise RuntimeError("embedding provider is not configured")
+        from ..security.provider_credentials import decrypt_secret
+
+        return decrypt_secret(config.api_key_ciphertext, config.api_key_nonce), config.model_name or EMBEDDING_MODEL
 
     async def embed_query(self, text: str) -> list[float]:
         # Chat/tool retry budgets are owned by the runtime, never nested here.
         settings = get_settings().model_copy(update={"embedding_max_retries": 0})
-        config = await self._config()
-        if config:
-            from ..security.provider_credentials import decrypt_secret
-            key = decrypt_secret(config.api_key_ciphertext, config.api_key_nonce)
-            model = config.model_name or settings.embedding_model
-        else:
-            key, model = settings.dashscope_api_key, settings.embedding_model
-        if not key or not model:
-            raise RuntimeError("embedding provider is not configured")
-        return (await self._embed_batches([text], api_key=key, model=model, settings=settings))[0]
+        api_key, model = await self._credentials()
+        return (await self._embed_batches([text], api_key=api_key, model=model,
+                                         base_url=EMBEDDING_BASE_URL, settings=settings))[0]
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        config = await self._config()
-        settings = get_settings()
-        if not config:
-            return await super().embed_documents(texts)
-        from ..security.provider_credentials import decrypt_secret
-
-        key = decrypt_secret(config.api_key_ciphertext, config.api_key_nonce)
-        model = config.model_name or settings.embedding_model
-        return await self._embed_batches(texts, api_key=key, model=model, settings=settings)
+        api_key, model = await self._credentials()
+        return await self._embed_batches(texts, api_key=api_key, model=model,
+                                        base_url=EMBEDDING_BASE_URL, settings=get_settings())

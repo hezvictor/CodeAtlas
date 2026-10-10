@@ -37,12 +37,13 @@ async def test_embedding_retries_429_then_succeeds(monkeypatch):
 
     client = _Client()
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_: client)
-    monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(
-        dashscope_api_key="key", embedding_model="model", embedding_dimensions=2,
-        dashscope_base_url="http://embedding", embedding_max_retries=1,
+    settings = SimpleNamespace(
+        embedding_dimensions=2, embedding_max_retries=1,
         embedding_retry_base_delay_seconds=0, embedding_retry_max_delay_seconds=0,
-    ))
-    assert await module.EmbeddingProvider().embed_query("q") == [0.1, 0.2]
+    )
+    assert await module.EmbeddingProvider()._embed_batches(
+        ["q"], api_key="key", model="model", base_url="http://embedding", settings=settings,
+    ) == [[0.1, 0.2]]
     assert client.calls == 2
 
 
@@ -70,13 +71,11 @@ async def test_embedding_documents_batches_inputs_and_preserves_order(monkeypatc
 
     client = BatchClient()
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_: client)
-    monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(
-        dashscope_api_key="key", embedding_model="model", embedding_dimensions=2,
-        embedding_batch_size=2, embedding_max_retries=0,
-        dashscope_base_url="http://embedding",
-    ))
+    settings = SimpleNamespace(embedding_dimensions=2, embedding_batch_size=2, embedding_max_retries=0)
 
-    vectors = await module.EmbeddingProvider().embed_documents(["a", "b", "c", "d", "e"])
+    vectors = await module.EmbeddingProvider()._embed_batches(
+        ["a", "b", "c", "d", "e"], api_key="key", model="model", base_url="http://embedding", settings=settings,
+    )
 
     assert client.batch_sizes == [2, 2, 1]
     assert vectors == [[0.0, 1.0], [1.0, 1.0], [0.0, 1.0], [1.0, 1.0], [0.0, 1.0]]
@@ -96,8 +95,11 @@ async def test_v3_never_exceeds_provider_batch_limit(monkeypatch):
             return httpx.Response(200, json={"data": [{"index": i, "embedding": [float(value), 1.0]} for i, value in enumerate(json["input"])]}, request=httpx.Request("POST", "https://provider/embeddings"))
 
     monkeypatch.setattr(module.httpx, "AsyncClient", lambda **_: Client())
-    monkeypatch.setattr(module, "get_settings", lambda: SimpleNamespace(dashscope_api_key="key", embedding_model="text-embedding-v3", embedding_dimensions=2, embedding_batch_size=16, embedding_max_retries=0, dashscope_base_url="https://provider"))
-    assert await module.EmbeddingProvider().embed_documents([str(i) for i in range(23)]) == [[float(i), 1.0] for i in range(23)]
+    settings = SimpleNamespace(embedding_dimensions=2, embedding_batch_size=16, embedding_max_retries=0)
+    assert await module.EmbeddingProvider()._embed_batches(
+        [str(i) for i in range(23)], api_key="key", model="text-embedding-v3",
+        base_url="https://provider", settings=settings,
+    ) == [[float(i), 1.0] for i in range(23)]
     assert sizes == [10, 10, 3]
 
 

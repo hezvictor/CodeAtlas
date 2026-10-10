@@ -33,31 +33,11 @@ CodeAtlas 将账号体系、个人题库、普通聊天、ACM 分析/解题、�
 - 可访问 OpenAI 兼容的聊天与 Embedding 模型服务。示例默认使用阿里云百炼兼容接口，也可换为其他兼容服务。
 - `3000`、`8000`、`9000` 与 `9001` 端口可用；如有冲突，请在 `.env` 中修改对应端口。
 
-### 1. 配置环境变量
+### 1. 无需配置环境变量
 
-```powershell
-git clone https://github.com/hezvictor/CodeAtlas.git
-cd CodeAtlas
-Copy-Item .env.example .env
-```
+模型凭证不再通过环境变量下发，而是在页面上配置。Compose 已为数据库、MinIO、端口、JWT 与凭证加密密钥提供本地可用的默认值，因此**不需要先创建 `.env`**。
 
-编辑 `.env`，至少替换以下示例值：
-
-```dotenv
-# 使用足够长的随机值。升级已有部署时必须保留原值。
-JWT_SECRET_KEY=replace-with-a-long-random-secret
-MODEL_CREDENTIAL_ENCRYPTION_KEY=replace-with-another-long-random-secret
-
-# OpenAI 兼容模型服务的访问凭证与模型名。
-DASHSCOPE_API_KEY=sk-your-key
-CHAT_MODEL=your-chat-model
-EMBEDDING_MODEL=your-embedding-model
-
-# 与所选 Embedding 模型的输出维度保持一致。
-EMBEDDING_DIMENSIONS=1024
-```
-
-生产环境还应替换 `POSTGRES_PASSWORD`、`MINIO_ROOT_PASSWORD` 等默认密码。若使用重排序服务，可选填 `RERANKER_BASE_URL`、`RERANKER_API_KEY` 和 `RERANKER_MODEL`。
+`DASHSCOPE_API_KEY`、`CHAT_MODEL`、`EMBEDDING_MODEL` 都不需要手动填写：聊天模型只使用模型配置页中添加并检测通过的连接；Embedding 使用页面上保存的百炼 Key。
 
 ### 2. 启动服务
 

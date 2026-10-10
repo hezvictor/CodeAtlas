@@ -252,10 +252,10 @@ export default function ModelSettingsPage() {
       })}
       <section className="panel profile-form">
         <h3>知识库 Embedding</h3>
-        <p className="muted">当前模型为 {embedding?.model_name || "text-embedding-v3"}。来源：{embedding?.source === "project" ? "项目默认配置" : "用户覆盖配置"}。用户配置验证成功后会覆盖项目默认值。</p>
+        <p className="muted">当前模型为 {embedding?.model_name || "text-embedding-v3"}。凭证只能在本页配置，项目不提供默认 Key；未测试通过前不会建立索引。</p>
         <form onSubmit={saveEmbedding}><input name="api_key" type="password" autoComplete="new-password" placeholder="百炼 API Key" required /><button className="pill fill">保存 Embedding Key</button></form>
-        {embedding?.source === "user" ? <button className="pill" type="button" onClick={testEmbedding}>测试 Embedding 连接</button> : null}
-        <small className="muted">状态：{embedding?.status || "未配置"}</small>
+        {embedding?.configured ? <button className="pill" type="button" onClick={testEmbedding}>测试 Embedding 连接</button> : null}
+        <small className="muted">状态：{!embedding || embedding.status === "unconfigured" ? "未配置" : embedding.status}</small>
       </section>
       {message || error ? <div className={`toast ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>{error || message}</div> : null}
     </main>

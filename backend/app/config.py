@@ -45,10 +45,8 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     minio_root_user: str = "codeatlas"
     minio_root_password: str = "codeatlas-dev-password"
-    dashscope_api_key: str = ""
-    dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    chat_model: str = ""
-    embedding_model: str = "text-embedding-v3"
+    # 模型凭证只能由用户在页面上配置，不存在项目级环境变量回退通道；
+    # 这里只保留固定的向量维度，用于数据库列类型校验。
     embedding_dimensions: int = 1024
     embedding_batch_size: int = 10
     embedding_max_input_chars: int = 12_000
@@ -101,12 +99,15 @@ class Settings(BaseSettings):
             self.refresh_token_retention_days = self.refresh_token_expire_days
         if self.app_env.lower() in {"prod", "production"} and (
             len(self.jwt_secret_key) < 32
-            or self.jwt_secret_key.startswith("replace")
-            or self.minio_root_password.startswith("codeatlas-dev")
+            or self.jwt_secret_key.startswith(("replace", "codeatlas-local"))
+            or self.minio_root_password.startswith(("codeatlas-dev", "codeatlas-local"))
             or "localhost" in self.frontend_url.lower()
         ):
             raise ValueError("Production credentials and browser URLs must not use development defaults")
-        if self.app_env.lower() in {"prod", "production"} and len(self.model_credential_encryption_key) < 32:
+        if self.app_env.lower() in {"prod", "production"} and (
+            len(self.model_credential_encryption_key) < 32
+            or self.model_credential_encryption_key.startswith(("replace", "codeatlas-local"))
+        ):
             raise ValueError("MODEL_CREDENTIAL_ENCRYPTION_KEY must have at least 32 characters in production")
 
 

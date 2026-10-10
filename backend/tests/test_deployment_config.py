@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 
 import pytest
@@ -38,4 +38,24 @@ def test_compose_does_not_hardcode_service_credentials():
 def test_compose_uses_environment_for_browser_url_and_database_healthcheck():
     compose = compose_file().read_text(encoding="utf-8")
     assert "FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}" in compose
-    assert 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}' in compose
+    assert 'pg_isready -U ${POSTGRES_USER:-codeatlas} -d ${POSTGRES_DB:-codeatlas}' in compose
+
+
+def test_compose_boots_without_a_local_env_file():
+    """`git clone` 之后直接 `docker compose up -d --build` 必须可用，无需手工创建 .env。"""
+    compose = compose_file().read_text(encoding="utf-8")
+    assert ":?" not in compose, "compose 不能再声明必填变量"
+    assert "required: false" in compose
+    required = ("${POSTGRES_USER}", "${POSTGRES_PASSWORD}", "${POSTGRES_DB}",
+                "${MINIO_ROOT_USER}", "${MINIO_ROOT_PASSWORD}", "${JWT_SECRET_KEY}", "${S3_BUCKET}")
+    for line in compose.splitlines():
+        if any(token in line for token in required):
+            raise AssertionError(f"变量缺少默认值: {line.strip()}")
+
+
+def test_compose_exposes_no_model_credential_environment_channel():
+    """模型凭证只走页面配置，compose 不再下发任何模型环境变量。"""
+    compose = compose_file().read_text(encoding="utf-8")
+    assert "DASHSCOPE_API_KEY" not in compose
+    assert "CHAT_MODEL" not in compose
+    assert "EMBEDDING_MODEL" not in compose

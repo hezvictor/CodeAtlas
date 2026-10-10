@@ -18,7 +18,7 @@ from ..models import (
     RerankerConfig,
     User,
 )
-from ..providers.embedding import project_embedding_is_configured
+from ..providers.embedding import EMBEDDING_MODEL
 from ..providers.openai_compatible import OpenAICompatibleChatProvider
 from ..providers.url_validation import validate_provider_base_url
 from ..schemas import (
@@ -275,15 +275,13 @@ async def update_model_capacity(connection_id: uuid.UUID, model_id: uuid.UUID, p
 
 
 def embedding_response(config: EmbeddingConfig | None) -> EmbeddingConfigResponse:
-    settings = get_settings()
-    project_default = project_embedding_is_configured(settings)
     return EmbeddingConfigResponse(
-        model_name=config.model_name if config else settings.embedding_model,
-        status=config.status if config else ("configured" if project_default else "unconfigured"),
+        model_name=config.model_name if config else EMBEDDING_MODEL,
+        status=config.status if config else "unconfigured",
         verification_error=config.verification_error if config else None,
         last_tested_at=config.last_tested_at if config else None,
-        configured=config is not None or project_default,
-        source="user" if config else "project",
+        configured=config is not None,
+        source="user" if config else "none",
     )
 
 
@@ -307,11 +305,10 @@ async def get_embedding_config(user_id=Depends(current_user_id), session: AsyncS
 
 @utility_router.patch("/embedding-config", response_model=EmbeddingConfigResponse)
 async def update_embedding_config(payload: EmbeddingConfigUpdate, user_id=Depends(current_user_id), session: AsyncSession = Depends(get_session)):
-    settings = get_settings()
     secret = encrypt_secret(payload.api_key)
     config = await session.scalar(select(EmbeddingConfig).where(EmbeddingConfig.user_id == user_id))
     if not config:
-        config = EmbeddingConfig(user_id=user_id, model_name=settings.embedding_model, api_key_ciphertext=secret.ciphertext, api_key_nonce=secret.nonce)
+        config = EmbeddingConfig(user_id=user_id, model_name=EMBEDDING_MODEL, api_key_ciphertext=secret.ciphertext, api_key_nonce=secret.nonce)
         session.add(config)
     else:
         config.api_key_ciphertext = secret.ciphertext

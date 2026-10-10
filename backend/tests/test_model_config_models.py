@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 
 import pytest
 
@@ -85,22 +85,13 @@ async def test_chat_model_resolution_never_falls_back_to_environment_credentials
     assert error.value.status_code == 409
 
 
-def test_only_verified_embedding_configuration_enables_rag():
-    from app.routers.conversations import embedding_config_is_verified
+@pytest.mark.asyncio
+async def test_embedding_requires_user_configuration_without_project_default():
+    """没有用户 Embedding 配置时必须直接失败，不再回退到环境变量凭证。"""
+    from app.providers.embedding import UserEmbeddingProvider
 
-    assert embedding_config_is_verified(None) is False
-    assert embedding_config_is_verified(type("Config", (), {"status": "unverified"})()) is False
-    assert embedding_config_is_verified(type("Config", (), {"status": "invalid"})()) is False
-    assert embedding_config_is_verified(type("Config", (), {"status": "verified"})()) is True
+    class Session:
+        async def scalar(self, _statement): return None
 
-
-def test_project_embedding_default_enables_rag_without_user_override(monkeypatch):
-    from app.routers import conversations as conversations_module
-
-    monkeypatch.setattr(
-        conversations_module,
-        "get_settings",
-        lambda: type("Settings", (), {"dashscope_api_key": "project-key", "embedding_model": "text-embedding-v3"})(),
-    )
-
-    assert conversations_module.embedding_is_available(None) is True
+    with pytest.raises(RuntimeError, match="not configured"):
+        await UserEmbeddingProvider(Session(), uuid.uuid4()).embed_query("query")

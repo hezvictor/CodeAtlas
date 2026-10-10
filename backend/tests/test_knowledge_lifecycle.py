@@ -21,6 +21,7 @@ from app.models import (
     DocumentChunk,
     DocumentJob,
     DocumentVersion,
+    EmbeddingConfig,
     Message,
     User,
 )
@@ -88,7 +89,6 @@ async def db(monkeypatch):
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(tasks, "session_factory", factory)
-    monkeypatch.setattr(tasks, "project_embedding_is_configured", lambda: True)
 
     class Storage:
         deleted = []
@@ -116,11 +116,14 @@ async def db(monkeypatch):
         await admin.dispose()
 
 
-async def seed(factory, *, existing=False, key="new"):
+async def seed(factory, *, existing=False, key="new", configured=True):
     async with factory() as session:
         user = User(email=f"{uuid4()}@test.invalid", password_hash="test", nickname="Test")
         session.add(user)
         await session.flush()
+        if configured:
+            session.add(EmbeddingConfig(user_id=user.id, model_name="text-embedding-v3", status="verified",
+                                        api_key_ciphertext="test-ciphertext", api_key_nonce="test-nonce"))
         doc = Document(user_id=user.id, title="notes", filename="notes.md")
         session.add(doc)
         await session.flush()
@@ -293,8 +296,7 @@ async def test_reindex_staging_is_invisible_until_activation(db, monkeypatch):
 @pytest.mark.asyncio
 async def test_unconfigured_embedding_keeps_source_but_no_index(db, monkeypatch):
     factory, tasks, storage = db
-    doc_id, version_id, job_id, _ = await seed(factory)
-    monkeypatch.setattr(tasks, "project_embedding_is_configured", lambda: False)
+    doc_id, version_id, job_id, _ = await seed(factory, configured=False)
     assert (await tasks.process_document(None, str(job_id)))["status"] == "waiting_embedding"
     async with factory() as session:
         assert (await session.get(Document, doc_id)).current_version_id is None
@@ -313,8 +315,6 @@ async def test_unsupported_legacy_jobs_fail_without_reading_the_source(db, monke
         version.extension = extension
         version.original_filename = "notes" + extension
         await session.commit()
-    monkeypatch.setattr(tasks, "project_embedding_is_configured", lambda: False)
-
     reads = []
 
     async def unexpected_read(_key):
